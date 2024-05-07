@@ -287,7 +287,7 @@ def main():
         ["seed", [1, 2]],
         ["n_categories", [16, 64]],
         ["d_state", [16]],
-        ["induction_len", [8, 16, 255]],
+        ["induction_len", [8, 16, 32]],
         ["d_model", [64]],
         ["seq_len", [256]],
         ["num_triggers", [1]],
@@ -315,7 +315,7 @@ def main():
     settings_options_s6_complex = [
         ["seed", [1, 2]],
         ["n_categories", [16, 64]],
-        ["d_state", [16]],
+        ["d_state", [8]],
         ["induction_len", [8, 16, 255]],
         ["d_model", [64]],
         ["seq_len", [256]],

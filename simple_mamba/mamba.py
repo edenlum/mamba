@@ -39,7 +39,7 @@ class MambaConfig:
     initA_imag: str
     initA_real: str
     param_A_imag: str
-    dt_is_selective: str
+    dt_is_selective: bool
     channel_sharing: str
     deterministic: bool
     pscan: bool
@@ -50,7 +50,7 @@ class MambaConfig:
     d_state: int = 16  #  N in paper/comments
     expand_factor: int = 2  #  E in paper/comments
     d_conv: int = 4
-    A_imag_using_weight_decay: str = True
+    A_imag_using_weight_decay: bool = True
 
     dt_min: float = 0.001
     dt_max: float = 0.1
@@ -171,7 +171,7 @@ class MambaBlock(nn.Module):
             #  projects Δ from dt_rank to d_inner
             self.dt_proj = nn.Linear(config.dt_rank, config.d_inner, bias=True)
 
-            if config.dt_is_selective == "True":
+            if config.dt_is_selective:
                 self.dt_proj = nn.Linear(config.dt_rank, config.d_inner, bias=True, dtype=torch.float)
 
                 #  dt initialization
@@ -194,12 +194,10 @@ class MambaBlock(nn.Module):
                 with torch.no_grad():
                     self.dt_proj.bias.copy_(inv_dt)
                 self.dt_proj.bias._no_reinit = True  # initialization would set all Linear.bias to zero, need to mark this one as _no_reinit
-            elif config.dt_is_selective == "False":
+            else:
                 inv_dt = torch.rand(config.d_inner) * (math.log(config.dt_max) - math.log(config.dt_min)) + math.log(
                         config.dt_min)
                 self.inv_dt = nn.Parameter(inv_dt)
-            else:
-                raise NotImplementedError
 
             # S4D real initialization
             A = torch.arange(1, config.d_state + 1, dtype=torch.float32).repeat(config.d_inner, 1)
@@ -217,11 +215,11 @@ class MambaBlock(nn.Module):
             #
             # self.x_proj = nn.Linear(config.d_inner, config.dt_rank + 2 * self.BC_dims, bias=False)
 
-            if config.deterministic:
-                torch.manual_seed(1)
+            # if config.deterministic:
+            #     torch.manual_seed(1)
             C_bias = torch.randn(config.d_inner, config.d_state, dtype=torch.cfloat)
-            if config.deterministic:
-                torch.manual_seed(10)
+            # if config.deterministic:
+            #     torch.manual_seed(10)
             # B_bias = torch.randn(config.d_inner, config.d_state, dtype=torch.cfloat)
             self.B_bias_real = torch.ones(config.d_inner, config.d_state, dtype=torch.float)
             self.B_bias_imag = torch.zeros(config.d_inner, config.d_state, dtype=torch.float)
@@ -238,8 +236,8 @@ class MambaBlock(nn.Module):
 
             #  dt initialization
             #  dt weights
-            if config.deterministic:
-                torch.manual_seed(2)
+            # if config.deterministic:
+            #     torch.manual_seed(2)
             inv_dt = torch.rand(config.d_inner) * (math.log(config.dt_max) - math.log(config.dt_min)) + math.log(
                 config.dt_min)
             #self.inv_dt = nn.Parameter(inv_dt, requires_grad = False)
@@ -253,8 +251,8 @@ class MambaBlock(nn.Module):
             # self.A_imag = nn.Parameter(A_imag, requires_grad = False)
             self.A_imag = nn.Parameter(A_imag)
 
-            if config.deterministic:
-                torch.manual_seed(3)
+            # if config.deterministic:
+            #     torch.manual_seed(3)
             # self.D = nn.Parameter(torch.randn(config.d_inner), requires_grad = False)
             self.D = nn.Parameter(torch.randn(config.d_inner))
 
@@ -274,7 +272,7 @@ class MambaBlock(nn.Module):
             # self.x_proj.weight.imag.data.zero_()
 
             #  projects Δ from dt_rank to d_inner
-            if config.dt_is_selective == "True":
+            if config.dt_is_selective:
                 self.dt_proj = nn.Linear(config.dt_rank, config.d_inner, bias=True, dtype=torch.float)
 
                 #  dt initialization
@@ -297,12 +295,10 @@ class MambaBlock(nn.Module):
                 with torch.no_grad():
                     self.dt_proj.bias.copy_(inv_dt)
                 self.dt_proj.bias._no_reinit = True  # initialization would set all Linear.bias to zero, need to mark this one as _no_reinit
-            elif config.dt_is_selective == "False":
+            else:
                 inv_dt = torch.rand(config.d_inner) * (math.log(config.dt_max) - math.log(config.dt_min)) + math.log(
                         config.dt_min)
                 self.inv_dt = nn.Parameter(inv_dt)
-            else:
-                raise NotImplementedError
 
 
             if config.initA_real == "S4":
@@ -364,7 +360,7 @@ class MambaBlock(nn.Module):
                                       is_real=False,
                                       shared=config.channel_sharing,
                                       init="diag-lin",
-                                      deterministic = self.config.deterministic)
+                                      deterministic=self.config.deterministic)
         elif config.ssm_type == "S4D-Real":
             self.ssm_kernel = FFTConv(d_model=config.d_inner,
                                       d_state=config.d_state,
@@ -373,7 +369,7 @@ class MambaBlock(nn.Module):
                                       mode='s4d',
                                       is_real=True,
                                       shared=config.channel_sharing,
-                                      deterministic = self.config.deterministic)
+                                      deterministic=self.config.deterministic)
         elif config.ssm_type == "conv":
             self.ssm_kernel = nn.Conv1d(in_channels=config.d_inner, out_channels=config.d_inner,
                                         kernel_size=config.d_state, bias=False,
@@ -463,9 +459,9 @@ class MambaBlock(nn.Module):
             else:
                 pass
 
-            if self.config.dt_is_selective == "True":
+            if self.config.dt_is_selective:
                 delta = F.softplus(self.dt_proj(delta))  #  (B, L, ED)
-            elif self.config.dt_is_selective == "False":
+            else:
                 # delta = torch.zeros(delta.shape) + torch.exp(self.inv_dt)
                 delta_new = torch.exp(self.inv_dt)
                 delta = torch.zeros([B.shape[0], B.shape[1], A.shape[0]], device=A.device) + delta_new  #  (B, L, ED)
@@ -506,13 +502,11 @@ class MambaBlock(nn.Module):
                 B = B.reshape(b, l, ed, self.config.d_state)
                 C = C.reshape(b, l, ed, self.config.d_state)
 
-            if self.config.dt_is_selective == "True":
+            if self.config.dt_is_selective:
                 delta = F.softplus(self.dt_proj(delta))  #  (B, L, ED)
-            elif self.config.dt_is_selective == "False":
+            else:
                 delta_new = torch.exp(self.inv_dt)
                 delta = torch.zeros([B.shape[0], B.shape[1], A.shape[0]], device=A.device) + delta_new #  (B, L, ED)
-            else:
-                raise NotImplementedError
 
             if self.config.channel_sharing:
                 B = B.unsqueeze(2)
