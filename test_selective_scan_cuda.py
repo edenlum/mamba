@@ -14,37 +14,8 @@ lags = [20, ]
 extras = [10, ]
 epochs = 100
 
-# settings_options_s6complex = [
-#     ["seed", [3]],
-#     ["ssm_type", ["S6-Real", "S6-Complex"]],
-#     ["d_model", [64]],
-#     ["d_state", [8]],
-#     ["lag", lags],
-#     ["extra", extras],
-#     ["n_layers", [2]],
-#     ["n_categories", [n_categories]],
-#     ["batch_size", [batch_size]],
-#     ["epochs", [epochs]],  # [int(1600 * 6]],
-#     ["epoch_size", [128 * 4]],
-#     ["stop_on_loss", [0.01]],
-#     ["lr", [1e-3]],
-#     ["A_imag_using_weight_decay", ["True"]],
-#     ["initA_imag", ["S4"]],
-#     ["param_A_imag", ["normal",]],
-#     ["discretizationB", ["zoh"]],
-#     ["discretizationA", ["normal"]],
-#     ["initA_real", ["S6"]],
-#     ["dt_is_selective", [True, False]],
-#     ["channel_sharing", [True]],
-#     ["bias", [False]],
-#     ["deterministic", [True]],
-#     ["pscan", [False, True]],
-#     ["comment", [""]],
-#     ["use_cuda", [None]]
-# ]
-
 settings_options_s6complex = [
-    ["seed", [3]],
+    ["seed", [2]],
     ["ssm_type", ["S6-Real", "S6-Complex"]],
     ["d_model", [64]],
     ["d_state", [8]],
@@ -63,7 +34,7 @@ settings_options_s6complex = [
     ["discretizationB", ["s6"]],
     ["discretizationA", ["normal"]],
     ["initA_real", ["S6"]],
-    ["dt_is_selective", [False]],
+    ["dt_is_selective", [True, False]],
     ["channel_sharing", [True]],
     ["bias", [False]],
     ["deterministic", [True]],
