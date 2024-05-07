@@ -1,25 +1,19 @@
-import torch.nn.functional as F
+from asyncio import Event
 from tqdm import tqdm
-import wandb
-import torch
-from torch import optim
-from ds.datasets import DynamicCategoricalDataset
-from simple_mamba.mamba_lm import MambaLM, MambaLMConfig
-import itertools
-import numpy as np
-from dataclasses import dataclass
+from typing import Tuple
+
+from ray.actor import ActorHandle
+
+
 import ray
 import os
-from asyncio import Event
-from typing import Tuple
-import ray
-from ray.actor import ActorHandle
-from tqdm import tqdm
+
 import traceback
 
-os.environ["WANDB_SILENT"] = "true"
+from utils import Config, experiments
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+
+os.environ["WANDB_SILENT"] = "true"
 
 @ray.remote
 class ProgressBarActor:
@@ -110,6 +104,12 @@ class ProgressBar:
 
 # Assumptions: 'model', 'dataloader', 'device', 'optim' (optimizer) are already defined
 def train(config, model, data_loader, optimizer):
+    import torch.nn.functional as F
+    import wandb
+    import torch
+    import numpy as np
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
     # Setup tqdm for the outer loop
     # pbar = tqdm(total=config.epochs, desc="Epoch Progress", position=0)
 
@@ -174,51 +174,21 @@ def train(config, model, data_loader, optimizer):
     # pbar.close()
 
 
-@dataclass
-class Config:
-    ssm_type: str
-    initA_real: str
-    initA_imag: str
-    discretizationA: str
-    discretizationB: str
-    param_A_imag: str
-    A_imag_using_weight_decay: str
-    dt_is_selective: str
-    channel_sharing: str
-    deterministic:bool
-    pscan: bool
-    d_model: int
-    d_state: int
-    n_layers: int
-    n_categories: int
-    lag: int
-    extra: int
-    batch_size: int
-    epoch_size: int
-    epochs: int
-    lr: float
-    stop_on_loss: float
-    seed: int
-    comment: str
-    bias:bool
-
-def experiments(kwargs):
-    # Extract argument names and their corresponding value lists
-    arg_names = [k[0] for k in kwargs]
-    value_lists = [k[1] for k in kwargs]
-
-    # Iterate over the Cartesian product of value lists
-    for values in itertools.product(*value_lists):
-        # Yield a dictionary mapping argument names to values
-        yield dict(zip(arg_names, values))
-
 @ray.remote(num_gpus=0.5)# if torch.cuda.is_available() else 0)
-def run_experiment(config, progress_bar_actor):
+def run_experiment(config: Config, progress_bar_actor):
+    import torch
+    from torch import optim
+    from ds.datasets import DynamicCategoricalDataset
+    from simple_mamba.mamba_lm import MambaLM, MambaLMConfig
+    import numpy as np
+    import wandb
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     try:
         exp_name = name(config)
 
         wandb.init(
-            project="CheckIfSeqIsGood",
+            project="S6VSS4-Delay",
             entity="yuv-milo",
             name=exp_name,
             config=config
@@ -243,7 +213,9 @@ def run_experiment(config, progress_bar_actor):
             pad_vocab_size_multiple=config.n_categories,
             deterministic = config.deterministic,
             bias=config.bias,
-            pscan = config.pscan)
+            pscan = config.pscan,
+            use_cuda=config.use_cuda
+        )
 
         dataset = DynamicCategoricalDataset(config.epoch_size,
                                             config.extra + config.lag,
@@ -265,7 +237,7 @@ def name(config):
     return f"{config.ssm_type}-lag{config.lag}-extra{config.extra}-disc{config.discretizationA}-{config.discretizationB}"
 
 def main():
-    ray.init(num_cpus=64, ignore_reinit_error=True)
+    ray.init(num_cpus=16, ignore_reinit_error=True)
     pb = ProgressBar()
     progress_bar_actor = pb.actor
 
@@ -273,45 +245,41 @@ def main():
     n_categories = 16
 
     # Check where S4-Complex Fails
-    lags = [20,]
+    lags = [100,]
     extras = [10,]
-    epochs = 100
-
-    # # Check equal
-    # lags = [128]
-    # extras = [32]
-    # epoch = 200
+    epochs = 500
 
 
-    settings_options_s4_complex = [
-        ["seed", [2]],
-        ["ssm_type", ["S4D-Complex"]],
-        ["discretizationA", ["default"]],
-        ["discretizationB", ["default"]],
-        ["d_model", [64]],
-        ["d_state", [16]],
-        ["lag", lags],
-        ["extra", extras],
-        ["n_layers", [2]],
-        ["n_categories", [n_categories]],
-        ["batch_size", [batch_size]],
-        ["epochs", [epochs]],  # [int(1600 * 6]],
-        ["epoch_size", [128 * 4]],
-        ["lr", [1e-3]],
-        ["stop_on_loss", [0.01]],
-        ["initA_imag", [None, ]],
-        ["initA_real", [None, ]],
-        ["param_A_imag", ["normal", ]],
-        ["A_imag_using_weight_decay", [None, ]],
-        ["dt_is_selective", [None, ]],
-        ["channel_sharing", [False]],
-        ["bias", [False]],
-        ["deterministic", [False]],
-        ["pscan", [False]]
-    ]
+    # settings_options_s4_complex = [
+    #     ["seed", [2]],
+    #     ["ssm_type", ["S4D-Complex"]],
+    #     ["discretizationA", ["default"]],
+    #     ["discretizationB", ["default"]],
+    #     ["d_model", [64]],
+    #     ["d_state", [16]],
+    #     ["lag", lags],
+    #     ["extra", extras],
+    #     ["n_layers", [2]],
+    #     ["n_categories", [n_categories]],
+    #     ["batch_size", [batch_size]],
+    #     ["epochs", [epochs]],  # [int(1600 * 6]],
+    #     ["epoch_size", [128 * 4]],
+    #     ["lr", [1e-3]],
+    #     ["stop_on_loss", [0.01]],
+    #     ["initA_imag", [None, ]],
+    #     ["initA_real", [None, ]],
+    #     ["param_A_imag", ["normal", ]],
+    #     ["A_imag_using_weight_decay", [None, ]],
+    #     ["dt_is_selective", [None, ]],
+    #     ["channel_sharing", [False]],
+    #     ["bias", [False]],
+    #     ["deterministic", [False]],
+    #     ["pscan", [False]],
+    #     ["use_cuda", [False]]
+    # ]
 
     settings_options_s6complex = [
-        ["seed", [2]],
+        ["seed", [4, 3]],
         ["ssm_type", ["S6-Real", "S6-Complex"]],
         ["d_model", [64]],
         ["d_state", [8]],
@@ -330,22 +298,23 @@ def main():
         ["discretizationB", ["zoh"]],
         ["discretizationA", ["normal"]],
         ["initA_real", ["S6"]],
-        ["dt_is_selective", ["True","False"]],
-        ["channel_sharing", [False]],
+        ["dt_is_selective", [True, False]],
+        ["channel_sharing", [True]],
         ["bias", [False]],
         ["deterministic", [True]],
-        ["pscan", [False, True]]
+        ["pscan", [False]],
+        ["use_cuda", [True, False]]
     ]
 
     tasks = []
-    # for i, config in enumerate(experiments(settings_options_real)):
-    #     print(i)
-    #     config.update({"comment": "comment in no re_init dt bias"})
-    #     tasks.append(run_experiment.remote(Config(**config), progress_bar_actor))
     for i, config in enumerate(experiments(settings_options_s6complex)):
         print(i)
         config.update({"comment": "comment in no re_init dt bias"})
         tasks.append(run_experiment.remote(Config(**config), progress_bar_actor))
+    # for i, config in enumerate(experiments(settings_options_real)):
+    #     print(i)
+    #     config.update({"comment": "comment in no re_init dt bias"})
+    #     tasks.append(run_experiment.remote(Config(**config), progress_bar_actor))
     # for i, config in enumerate(experiments(settings_options_s4_complex)):
     #     print(i)
     #     config.update({"comment": "comment in no re_init dt bias"})

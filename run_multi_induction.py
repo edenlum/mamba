@@ -16,6 +16,7 @@ import ray
 from ray.actor import ActorHandle
 from tqdm import tqdm
 import traceback
+import math
 
 os.environ["WANDB_SILENT"] = "true"
 
@@ -176,8 +177,9 @@ def train(config, model, data_loader, optimizer):
             "last_token_accuracy": last_token_accuracy
         })
 
-        if config.stop_on_loss and avg_loss < config.stop_on_loss:
-            break
+        if config.stop_on_loss:
+            if avg_loss < config.stop_on_loss or math.isnan(avg_loss):
+                break
 
     # pbar.close()
 
@@ -222,14 +224,14 @@ def experiments(kwargs):
         # Yield a dictionary mapping argument names to values
         yield dict(zip(arg_names, values))
 
-@ray.remote(num_gpus=0.5)# if torch.cuda.is_available() else 0)
+@ray.remote(num_gpus=0.25)# if torch.cuda.is_available() else 0)
 def run_experiment(config,progress_bar_actor):
     try:
         exp_name = name(config)
 
         wandb.init(
             project="InductionS6complex",
-            entity="complex-team",
+            entity="yuv-milo",
             name=exp_name,
             config=config
         )
@@ -283,22 +285,26 @@ def main():
     pb = ProgressBar()
     progress_bar_actor = pb.actor
 
+    induction_lens = [150, ]
+    seq_len = [300, ]
+    seeds = [1, 2]
+    epochs = 10000
+
     settings_options = [
-        ["seed", [1, 2]],
+        ["seed", seeds],
         ["n_categories", [16, 64]],
-        ["d_state", [16]],
-        ["induction_len", [8, 16, 255]],
+        ["d_state", [16,]],
+        ["induction_len", induction_lens],
         ["d_model", [64]],
-        ["seq_len", [256]],
+        ["seq_len", seq_len],
         ["num_triggers", [1]],
-        ["ssm_type", ["S4D-Real", "S4D-Complex", "S6-Real"]],
+        ["ssm_type", ["S4D-Real", "S4D-Complex"]],
         ["n_layers", [2]],
         ["batch_size", [8]],
-        ["epochs", [1600 * 3]],  # [int(1600 * 6]],
+        ["epochs", [epochs]],  # [int(1600 * 6]],
         ["epoch_size", [256 * 6]],
         ["lr", [1e-3]],
         ["stop_on_loss", [0.01]],
-
         ["A_imag_using_weight_decay", ["True"]],
         ["initA_imag", ["S4"]],
         ["param_A_imag", ["normal", ]],
@@ -306,6 +312,34 @@ def main():
         ["discretizationA", ["normal"]],
         ["initA_real", ["S6"]],
         ["dt_is_selective", ["False"]],
+        ["channel_sharing", [False]],
+        ["bias", [True]],
+        ["deterministic", [False]],
+        ["pscan", [True]]
+    ]
+
+    settings_options_s6_real = [
+        ["seed", seeds],
+        ["n_categories", [16, 64]],
+        ["d_state", [16, ]],
+        ["induction_len", induction_lens],
+        ["d_model", [64]],
+        ["seq_len", seq_len],
+        ["num_triggers", [1]],
+        ["ssm_type", ["S6-Real"]],
+        ["n_layers", [2]],
+        ["batch_size", [8]],
+        ["epochs", [epochs]],  # [int(1600 * 6]],
+        ["epoch_size", [256 * 6]],
+        ["lr", [1e-3]],
+        ["stop_on_loss", [0.01]],
+        ["A_imag_using_weight_decay", ["True"]],
+        ["initA_imag", ["S4"]],
+        ["param_A_imag", ["normal", ]],
+        ["discretizationB", ["s6"]],
+        ["discretizationA", ["normal"]],
+        ["initA_real", ["S6"]],
+        ["dt_is_selective", ["False","True"]],
         ["channel_sharing", [True]],
         ["bias", [True]],
         ["deterministic", [False]],
@@ -313,17 +347,17 @@ def main():
     ]
 
     settings_options_s6_complex = [
-        ["seed", [1, 2]],
+        ["seed", seeds],
         ["n_categories", [16, 64]],
-        ["d_state", [16]],
-        ["induction_len", [8, 16, 255]],
+        ["d_state", [8,]],
+        ["induction_len", induction_lens],
         ["d_model", [64]],
-        ["seq_len", [256]],
+        ["seq_len", seq_len],
         ["num_triggers", [1]],
         ["ssm_type", ["S6-Complex"]],
         ["n_layers", [2]],
         ["batch_size", [8]],
-        ["epochs", [1600 * 3]],  # [int(1600 * 6]],
+        ["epochs", [epochs]],  # [int(1600 * 6]],
         ["epoch_size", [256 * 6]],
         ["lr", [1e-3]],
         ["stop_on_loss", [0.01]],
@@ -342,15 +376,18 @@ def main():
     ]
 
     tasks = []
-    for i, config in enumerate(experiments(settings_options)):
-        print(i)
-        config.update({"comment": ""})
-        tasks.append(run_experiment.remote(Config(**config), progress_bar_actor))
-
     for i, config in enumerate(experiments(settings_options_s6_complex)):
         print(i)
         config.update({"comment": ""})
         tasks.append(run_experiment.remote(Config(**config), progress_bar_actor))
+    # for i, config in enumerate(experiments(settings_options_s6_real)):
+    #     print(i)
+    #     config.update({"comment": ""})
+    #     tasks.append(run_experiment.remote(Config(**config), progress_bar_actor))
+    # for i, config in enumerate(experiments(settings_options)):
+    #     print(i)
+    #     config.update({"comment": ""})
+    #     tasks.append(run_experiment.remote(Config(**config), progress_bar_actor))
     pb.set_total(len(tasks))
     pb.print_until_done()
     print("finished running all")

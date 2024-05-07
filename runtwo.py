@@ -1,25 +1,19 @@
-import torch.nn.functional as F
+from asyncio import Event
 from tqdm import tqdm
-import wandb
-import torch
-from torch import optim
-from ds.datasets import DynamicCategoricalDataset
-from simple_mamba.mamba_lm import MambaLM, MambaLMConfig
-import itertools
-import numpy as np
-from dataclasses import dataclass
+from typing import Tuple
+
+from ray.actor import ActorHandle
+
+
 import ray
 import os
-from asyncio import Event
-from typing import Tuple
-import ray
-from ray.actor import ActorHandle
-from tqdm import tqdm
+
 import traceback
 
-os.environ["WANDB_SILENT"] = "true"
+from utils import Config, experiments
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+
+os.environ["WANDB_SILENT"] = "true"
 
 @ray.remote
 class ProgressBarActor:
@@ -110,6 +104,12 @@ class ProgressBar:
 
 # Assumptions: 'model', 'dataloader', 'device', 'optim' (optimizer) are already defined
 def train(config, model, data_loader, optimizer):
+    import torch.nn.functional as F
+    import wandb
+    import torch
+    import numpy as np
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
     # Setup tqdm for the outer loop
     # pbar = tqdm(total=config.epochs, desc="Epoch Progress", position=0)
 
@@ -174,46 +174,16 @@ def train(config, model, data_loader, optimizer):
     # pbar.close()
 
 
-@dataclass
-class Config:
-    ssm_type: str
-    initA_real: str
-    initA_imag: str
-    discretizationA: str
-    discretizationB: str
-    param_A_imag: str
-    A_imag_using_weight_decay: str
-    dt_is_selective: str
-    channel_sharing: str
-    deterministic:bool
-    pscan: bool
-    d_model: int
-    d_state: int
-    n_layers: int
-    n_categories: int
-    lag: int
-    extra: int
-    batch_size: int
-    epoch_size: int
-    epochs: int
-    lr: float
-    stop_on_loss: float
-    seed: int
-    comment: str
-    bias:bool
-
-def experiments(kwargs):
-    # Extract argument names and their corresponding value lists
-    arg_names = [k[0] for k in kwargs]
-    value_lists = [k[1] for k in kwargs]
-
-    # Iterate over the Cartesian product of value lists
-    for values in itertools.product(*value_lists):
-        # Yield a dictionary mapping argument names to values
-        yield dict(zip(arg_names, values))
-
 @ray.remote(num_gpus=0.5)# if torch.cuda.is_available() else 0)
-def run_experiment(config, progress_bar_actor):
+def run_experiment(config: Config, progress_bar_actor):
+    import torch
+    from torch import optim
+    from ds.datasets import DynamicCategoricalDataset
+    from simple_mamba.mamba_lm import MambaLM, MambaLMConfig
+    import numpy as np
+    import wandb
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     try:
         exp_name = name(config)
 
@@ -243,7 +213,9 @@ def run_experiment(config, progress_bar_actor):
             pad_vocab_size_multiple=config.n_categories,
             deterministic = config.deterministic,
             bias=config.bias,
-            pscan = config.pscan)
+            pscan = config.pscan,
+            use_cuda=config.use_cuda
+        )
 
         dataset = DynamicCategoricalDataset(config.epoch_size,
                                             config.extra + config.lag,
@@ -274,8 +246,8 @@ def main():
 
     # Check where S4-Complex Fails
     lags = [256]
-    extras = [128, 256]
-    epochs = 1000
+    extras = [256]
+    epochs = 10000
 
 
     # settings_options_s4 = [
@@ -325,11 +297,12 @@ def main():
         ["initA_real", [None, ]],
         ["param_A_imag", [None, ]],
         ["A_imag_using_weight_decay", [None, ]],
-        ["dt_is_selective", ["False"]],
-        ["channel_sharing", [True, False]],
+        ["dt_is_selective", ["True"]],
+        ["channel_sharing", [True]],
         ["bias", [True]],
         ["deterministic", [False]],
-        ["pscan", [True]],
+        ["pscan", [False,]],
+        ["use_cuda", [True,]]
     ]
 
     settings_options_s6_complex = [
@@ -353,10 +326,12 @@ def main():
         ["bias", [True]],
         ["initA_imag", ["S4",]],
         ["initA_real", ["S4",]],
-        ["dt_is_selective", ["False"]],
+        ["dt_is_selective", ["False", "True"]],
         ["discretizationB", ["s6"]],
         ["d_state", [8]],
-        ["channel_sharing", [True, False]],
+        ["channel_sharing", [True]],
+        ["pscan", [False, ]],
+        ["use_cuda", [True, ]]
     ]
 
     tasks = []

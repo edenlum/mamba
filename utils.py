@@ -29,6 +29,7 @@ class Config:
     seed: int
     comment: str
     bias:bool
+    use_cuda:bool
 
 def experiments(kwargs):
     # Extract argument names and their corresponding value lists

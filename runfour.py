@@ -8,7 +8,6 @@ from simple_mamba.mamba_lm import MambaLM, MambaLMConfig
 import itertools
 import numpy as np
 from dataclasses import dataclass
-import ray
 import os
 from asyncio import Event
 from typing import Tuple
@@ -16,6 +15,9 @@ import ray
 from ray.actor import ActorHandle
 from tqdm import tqdm
 import traceback
+
+from utils import Config, experiments
+
 
 os.environ["WANDB_SILENT"] = "true"
 
@@ -174,44 +176,6 @@ def train(config, model, data_loader, optimizer):
     # pbar.close()
 
 
-@dataclass
-class Config:
-    ssm_type: str
-    initA_real: str
-    initA_imag: str
-    discretizationA: str
-    discretizationB: str
-    param_A_imag: str
-    A_imag_using_weight_decay: str
-    dt_is_selective: str
-    channel_sharing: str
-    deterministic:bool
-    pscan: bool
-    d_model: int
-    d_state: int
-    n_layers: int
-    n_categories: int
-    lag: int
-    extra: int
-    batch_size: int
-    epoch_size: int
-    epochs: int
-    lr: float
-    stop_on_loss: float
-    seed: int
-    comment: str
-    bias:bool
-
-def experiments(kwargs):
-    # Extract argument names and their corresponding value lists
-    arg_names = [k[0] for k in kwargs]
-    value_lists = [k[1] for k in kwargs]
-
-    # Iterate over the Cartesian product of value lists
-    for values in itertools.product(*value_lists):
-        # Yield a dictionary mapping argument names to values
-        yield dict(zip(arg_names, values))
-
 @ray.remote(num_gpus=0.5)# if torch.cuda.is_available() else 0)
 def run_experiment(config, progress_bar_actor):
     try:
@@ -243,7 +207,9 @@ def run_experiment(config, progress_bar_actor):
             pad_vocab_size_multiple=config.n_categories,
             deterministic = config.deterministic,
             bias=config.bias,
-            pscan = config.pscan)
+            pscan = config.pscan,
+            use_cuda=config.use_cuda
+        )
 
         dataset = DynamicCategoricalDataset(config.epoch_size,
                                             config.extra + config.lag,
