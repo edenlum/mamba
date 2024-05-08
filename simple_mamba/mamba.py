@@ -63,6 +63,8 @@ class MambaConfig:
     use_cuda: bool = False
 
     def __post_init__(self):
+        assert type(self.channel_sharing) == bool
+        assert type(self.dt_is_selective) == bool
         self.d_inner = self.expand_factor * self.d_model  # E*D = ED in comments
 
         if self.dt_rank == 'auto':

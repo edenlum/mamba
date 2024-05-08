@@ -1,26 +1,21 @@
-import torch.nn.functional as F
+from asyncio import Event
+
 from tqdm import tqdm
-import wandb
-import torch
-from torch import optim
-from ds.datasets import InductionHead
-from simple_mamba.mamba_lm import MambaLM, MambaLMConfig
-import itertools
-import numpy as np
+from typing import Tuple
 from dataclasses import dataclass
+
+from ray.actor import ActorHandle
+
+
 import ray
 import os
-from asyncio import Event
-from typing import Tuple
-import ray
-from ray.actor import ActorHandle
-from tqdm import tqdm
+
 import traceback
-import math
+
 
 os.environ["WANDB_SILENT"] = "true"
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+
 
 @ray.remote
 class ProgressBarActor:
@@ -111,6 +106,11 @@ class ProgressBar:
 
 # Assumptions: 'model', 'dataloader', 'device', 'optim' (optimizer) are already defined
 def train(config, model, data_loader, optimizer):
+    import torch.nn.functional as F
+    import wandb
+    import torch
+    import math
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     # Setup tqdm for the outer loop
     # pbar = tqdm(total=config.epochs, desc="Epoch Progress", position=0)
 
@@ -193,7 +193,7 @@ class Config:
     discretizationB: str
     param_A_imag: str
     A_imag_using_weight_decay: str
-    dt_is_selective: str
+    dt_is_selective: bool
     channel_sharing: str
     deterministic: bool
     pscan: bool
@@ -212,9 +212,11 @@ class Config:
     seed: int
     comment: str
     bias: bool
+    use_cuda:bool
 
 
 def experiments(kwargs):
+    import itertools
     # Extract argument names and their corresponding value lists
     arg_names = [k[0] for k in kwargs]
     value_lists = [k[1] for k in kwargs]
@@ -226,6 +228,13 @@ def experiments(kwargs):
 
 @ray.remote(num_gpus=0.25)# if torch.cuda.is_available() else 0)
 def run_experiment(config,progress_bar_actor):
+    import wandb
+    import torch
+    from torch import optim
+    from ds.datasets import InductionHead
+    from simple_mamba.mamba_lm import MambaLM, MambaLMConfig
+    import numpy as np
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     try:
         exp_name = name(config)
 
@@ -257,7 +266,9 @@ def run_experiment(config,progress_bar_actor):
             pad_vocab_size_multiple=config.n_categories,
             deterministic = config.deterministic,
             bias=config.bias,
-            pscan = config.pscan)
+            pscan = config.pscan,
+            use_cuda=config.use_cuda
+        )
 
         dataset = InductionHead(config.epoch_size,
                                 config.seq_len,
@@ -285,14 +296,16 @@ def main():
     pb = ProgressBar()
     progress_bar_actor = pb.actor
 
-    induction_lens = [150, ]
-    seq_len = [300, ]
+    induction_lens = [200, ]
+    seq_len = [400, ]
     seeds = [1, 2]
     epochs = 10000
+    n_categories = [16, 64]
+    batch_size = 8
 
     settings_options = [
         ["seed", seeds],
-        ["n_categories", [16, 64]],
+        ["n_categories", n_categories],
         ["d_state", [16,]],
         ["induction_len", induction_lens],
         ["d_model", [64]],
@@ -300,7 +313,7 @@ def main():
         ["num_triggers", [1]],
         ["ssm_type", ["S4D-Real", "S4D-Complex"]],
         ["n_layers", [2]],
-        ["batch_size", [8]],
+        ["batch_size", [batch_size]],
         ["epochs", [epochs]],  # [int(1600 * 6]],
         ["epoch_size", [256 * 6]],
         ["lr", [1e-3]],
@@ -311,68 +324,71 @@ def main():
         ["discretizationB", ["s6"]],
         ["discretizationA", ["normal"]],
         ["initA_real", ["S6"]],
-        ["dt_is_selective", ["False"]],
+        ["dt_is_selective", [False]],
         ["channel_sharing", [False]],
         ["bias", [True]],
         ["deterministic", [False]],
-        ["pscan", [True]]
+        ["pscan", [True]],
+        ["use_cuda", [True, ]],
     ]
 
     settings_options_s6_real = [
-        ["seed", seeds],
-        ["n_categories", [16, 64]],
-        ["d_state", [16, ]],
-        ["induction_len", induction_lens],
-        ["d_model", [64]],
-        ["seq_len", seq_len],
+        ["seed", [2, 3]],
         ["num_triggers", [1]],
         ["ssm_type", ["S6-Real"]],
+        ["discretizationA", ["normal"]],
+        ["discretizationB", ["s6"]],
+        ["d_model", [64]],
+        ["d_state", [16]],
+        ["induction_len", induction_lens],
         ["n_layers", [2]],
-        ["batch_size", [8]],
+        ["n_categories", n_categories],
+        ["batch_size", [batch_size]],
         ["epochs", [epochs]],  # [int(1600 * 6]],
-        ["epoch_size", [256 * 6]],
+        ["epoch_size", [128 * 4]],
         ["lr", [1e-3]],
         ["stop_on_loss", [0.01]],
-        ["A_imag_using_weight_decay", ["True"]],
-        ["initA_imag", ["S4"]],
-        ["param_A_imag", ["normal", ]],
-        ["discretizationB", ["s6"]],
-        ["discretizationA", ["normal"]],
-        ["initA_real", ["S6"]],
-        ["dt_is_selective", ["False","True"]],
+        ["initA_imag", [None, ]],
+        ["initA_real", [None, ]],
+        ["param_A_imag", [None, ]],
+        ["A_imag_using_weight_decay", [None, ]],
+        ["dt_is_selective", [True, False]],
         ["channel_sharing", [True]],
         ["bias", [True]],
         ["deterministic", [False]],
-        ["pscan", [True]]
+        ["pscan", [False, ]],
+        ["use_cuda", [True, ]],
+        ["seq_len", seq_len],
     ]
 
     settings_options_s6_complex = [
-        ["seed", seeds],
-        ["n_categories", [16, 64]],
-        ["d_state", [8,]],
-        ["induction_len", induction_lens],
-        ["d_model", [64]],
-        ["seq_len", seq_len],
+        ["seed", [2, 3]],
         ["num_triggers", [1]],
         ["ssm_type", ["S6-Complex"]],
+        ["discretizationA", ["normal"]],
+        ["d_model", [64]],
+        ["induction_len", induction_lens],
         ["n_layers", [2]],
-        ["batch_size", [8]],
+        ["n_categories", n_categories],
+        ["batch_size", [batch_size]],
         ["epochs", [epochs]],  # [int(1600 * 6]],
-        ["epoch_size", [256 * 6]],
+        ["epoch_size", [128 * 4]],
         ["lr", [1e-3]],
         ["stop_on_loss", [0.01]],
-
-        ["A_imag_using_weight_decay", ["True"]],
-        ["initA_imag", ["S4"]],
         ["param_A_imag", ["normal", ]],
-        ["discretizationB", ["s6"]],
-        ["discretizationA", ["normal"]],
-        ["initA_real", ["S4"]],
-        ["dt_is_selective", ["False"]],
-        ["channel_sharing", [True]],
-        ["bias", [True]],
+        ["A_imag_using_weight_decay", ["True", ]],
         ["deterministic", [False]],
-        ["pscan", [True]]
+        ["pscan", [True]],
+        ["bias", [True]],
+        ["initA_imag", ["S4", ]],
+        ["initA_real", ["S4", ]],
+        ["dt_is_selective", [True, False]],
+        ["discretizationB", ["s6"]],
+        ["d_state", [8]],
+        ["channel_sharing", [True]],
+        ["pscan", [False, ]],
+        ["use_cuda", [True, ]],
+        ["seq_len", seq_len],
     ]
 
     tasks = []
@@ -380,14 +396,14 @@ def main():
         print(i)
         config.update({"comment": ""})
         tasks.append(run_experiment.remote(Config(**config), progress_bar_actor))
-    # for i, config in enumerate(experiments(settings_options_s6_real)):
-    #     print(i)
-    #     config.update({"comment": ""})
-    #     tasks.append(run_experiment.remote(Config(**config), progress_bar_actor))
-    # for i, config in enumerate(experiments(settings_options)):
-    #     print(i)
-    #     config.update({"comment": ""})
-    #     tasks.append(run_experiment.remote(Config(**config), progress_bar_actor))
+    for i, config in enumerate(experiments(settings_options_s6_real)):
+        print(i)
+        config.update({"comment": ""})
+        tasks.append(run_experiment.remote(Config(**config), progress_bar_actor))
+    for i, config in enumerate(experiments(settings_options)):
+        print(i)
+        config.update({"comment": ""})
+        tasks.append(run_experiment.remote(Config(**config), progress_bar_actor))
     pb.set_total(len(tasks))
     pb.print_until_done()
     print("finished running all")

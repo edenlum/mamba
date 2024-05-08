@@ -245,9 +245,9 @@ def main():
     n_categories = 16
 
     # Check where S4-Complex Fails
-    lags = [256]
+    lags = [256, 512]
     extras = [256]
-    epochs = 10000
+    epochs = 20000
 
 
     # settings_options_s4 = [
@@ -297,7 +297,7 @@ def main():
         ["initA_real", [None, ]],
         ["param_A_imag", [None, ]],
         ["A_imag_using_weight_decay", [None, ]],
-        ["dt_is_selective", ["True"]],
+        ["dt_is_selective", [True, False]],
         ["channel_sharing", [True]],
         ["bias", [True]],
         ["deterministic", [False]],
@@ -326,7 +326,7 @@ def main():
         ["bias", [True]],
         ["initA_imag", ["S4",]],
         ["initA_real", ["S4",]],
-        ["dt_is_selective", ["False", "True"]],
+        ["dt_is_selective", [True, False]],
         ["discretizationB", ["s6"]],
         ["d_state", [8]],
         ["channel_sharing", [True]],
