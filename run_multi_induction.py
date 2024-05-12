@@ -1,25 +1,16 @@
-import torch.nn.functional as F
 from tqdm import tqdm
-import wandb
-import torch
-from torch import optim
-from ds.datasets import InductionHead
-from simple_mamba.mamba_lm import MambaLM, MambaLMConfig
-import itertools
-import numpy as np
 from dataclasses import dataclass
+
 import ray
 import os
 from asyncio import Event
 from typing import Tuple
-import ray
 from ray.actor import ActorHandle
-from tqdm import tqdm
-import traceback
+
 
 os.environ["WANDB_SILENT"] = "true"
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+
 
 @ray.remote
 class ProgressBarActor:
@@ -110,6 +101,10 @@ class ProgressBar:
 
 # Assumptions: 'model', 'dataloader', 'device', 'optim' (optimizer) are already defined
 def train(config, model, data_loader, optimizer):
+    import wandb
+    import torch.nn.functional as F
+    import torch
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     # Setup tqdm for the outer loop
     # pbar = tqdm(total=config.epochs, desc="Epoch Progress", position=0)
 
@@ -210,9 +205,11 @@ class Config:
     seed: int
     comment: str
     bias: bool
+    bidirectional: bool
 
 
 def experiments(kwargs):
+    import itertools
     # Extract argument names and their corresponding value lists
     arg_names = [k[0] for k in kwargs]
     value_lists = [k[1] for k in kwargs]
@@ -224,11 +221,19 @@ def experiments(kwargs):
 
 @ray.remote(num_gpus=0.5)# if torch.cuda.is_available() else 0)
 def run_experiment(config,progress_bar_actor):
+    import traceback
+    import numpy as np
+    from ds.datasets import InductionHead
+    from torch import optim
+    from simple_mamba.mamba_lm import MambaLM, MambaLMConfig
+    import wandb
+    import torch
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     try:
         exp_name = name(config)
 
         wandb.init(
-            project="InductionS6complex",
+            project="RealAbo",
             entity="complex-team",
             name=exp_name,
             config=config
@@ -255,7 +260,9 @@ def run_experiment(config,progress_bar_actor):
             pad_vocab_size_multiple=config.n_categories,
             deterministic = config.deterministic,
             bias=config.bias,
-            pscan = config.pscan)
+            pscan = config.pscan,
+            bidirectional=config.bidirectional
+        )
 
         dataset = InductionHead(config.epoch_size,
                                 config.seq_len,
@@ -283,74 +290,117 @@ def main():
     pb = ProgressBar()
     progress_bar_actor = pb.actor
 
-    settings_options = [
-        ["seed", [1, 2]],
-        ["n_categories", [16, 64]],
-        ["d_state", [16]],
-        ["induction_len", [8, 16, 255]],
-        ["d_model", [64]],
-        ["seq_len", [256]],
-        ["num_triggers", [1]],
-        ["ssm_type", ["S4D-Real", "S4D-Complex", "S6-Real"]],
-        ["n_layers", [2]],
-        ["batch_size", [8]],
-        ["epochs", [1600 * 3]],  # [int(1600 * 6]],
-        ["epoch_size", [256 * 6]],
-        ["lr", [1e-3]],
-        ["stop_on_loss", [0.01]],
+    batch_size = 32
+    n_categories = 16
+    epochs = 4000
+    layers = [4, 3, 2]
+    d_model = [1024, 256]
+    d_state = [1, 16]
 
-        ["A_imag_using_weight_decay", ["True"]],
-        ["initA_imag", ["S4"]],
-        ["param_A_imag", ["normal", ]],
-        ["discretizationB", ["s6"]],
+    settings_options_s6_real = [
+        ["seed", [2]],
+        ["ssm_type", ["S6-Real",]], #["S6-Real", "S6-Complex"]],
         ["discretizationA", ["normal"]],
-        ["initA_real", ["S6"]],
-        ["dt_is_selective", ["False"]],
+        ["d_model", d_model],
+        ["induction_len", [254]],
+        ["seq_len", [256]],
+        ["n_layers", layers],
+        ["n_categories", [n_categories]],
+        ["batch_size", [batch_size]],
+        ["epochs", [epochs]],  # [int(1600 * 6]],
+        ["epoch_size", [128 * 4]],
+        ["lr", [1e-3, 0.0005]],
+        ["stop_on_loss", [0.01]],
+        ["param_A_imag", ["normal", ]],
+        ["A_imag_using_weight_decay", ["True", ]],
+        ["deterministic", [False]],
+        ["pscan", [True]],
+        ["bias", [True]],
+        ["initA_imag", ["S4", ]],
+        ["initA_real", ["S4", ]],
+        ["dt_is_selective", [False]],
+        ["discretizationB", ["s6"]],
+        ["d_state", d_state],
         ["channel_sharing", [True]],
         ["bias", [True]],
         ["deterministic", [False]],
-        ["pscan", [True]]
+        ["pscan", [True]],
+        ["bidirectional", [False]],
+        ["num_triggers", [1, ]],
     ]
 
-    settings_options_s6_complex = [
-        ["seed", [1, 2]],
-        ["n_categories", [16, 64]],
-        ["d_state", [16]],
-        ["induction_len", [8, 16, 255]],
-        ["d_model", [64]],
-        ["seq_len", [256]],
-        ["num_triggers", [1]],
-        ["ssm_type", ["S6-Complex"]],
-        ["n_layers", [2]],
-        ["batch_size", [8]],
-        ["epochs", [1600 * 3]],  # [int(1600 * 6]],
-        ["epoch_size", [256 * 6]],
-        ["lr", [1e-3]],
-        ["stop_on_loss", [0.01]],
-
-        ["A_imag_using_weight_decay", ["True"]],
-        ["initA_imag", ["S4"]],
-        ["param_A_imag", ["normal", ]],
-        ["discretizationB", ["s6"]],
+    settings_options_s4 = [
+        ["seed", [2, 3]],
+        ["ssm_type", ["S4D-Real"]],#["S4D-Complex", "S4D-Real"]],
         ["discretizationA", ["normal"]],
-        ["initA_real", ["S4"]],
-        ["dt_is_selective", ["False"]],
-        ["channel_sharing", [True]],
-        ["bias", [True]],
+        ["d_model", d_model],
+        ["induction_len", [254]],
+        ["seq_len", [256]],
+        ["n_layers", layers],
+        ["n_categories", [n_categories]],
+        ["batch_size", [batch_size]],
+        ["epochs", [epochs]],  # [int(1600 * 6]],
+        ["epoch_size", [128 * 4]],
+        ["lr", [1e-3, 0.0005]],
+        ["stop_on_loss", [0.01]],
+        ["param_A_imag", ["normal", ]],
+        ["A_imag_using_weight_decay", ["True", ]],
         ["deterministic", [False]],
-        ["pscan", [True]]
+        ["pscan", [True]],
+        ["bias", [True]],
+        ["initA_imag", ["S4", ]],
+        ["initA_real", ["S4", ]],
+        ["dt_is_selective", [True]],
+        ["discretizationB", ["s6"]],
+        ["d_state", d_state],
+        ["channel_sharing", [False]],
+        ["num_triggers", [1, ]],
+        ["bidirectional", [False]],
+    ]
+
+    settings_options_smallj = [
+        ["seed", [1920]],
+        ["ssm_type", ["S4D-Real"]],  # ["S4D-Complex", "S4D-Real"]],
+        ["discretizationA", ["normal"]],
+        ["d_model", [64]],
+        ["induction_len", [254]],
+        ["seq_len", [256]],
+        ["n_layers", 6],
+        ["n_categories", [n_categories]],
+        ["batch_size", [16]],
+        ["epochs", [1000]],  # [int(1600 * 6]],
+        ["epoch_size", [2500]],
+        ["lr", [0.0005]],
+        ["stop_on_loss", [0.01]],
+        ["param_A_imag", ["normal", ]],
+        ["A_imag_using_weight_decay", ["True", ]],
+        ["deterministic", [False]],
+        ["pscan", [True]],
+        ["bias", [True]],
+        ["initA_imag", ["S4", ]],
+        ["initA_real", ["S4", ]],
+        ["dt_is_selective", [True]],
+        ["discretizationB", ["s6"]],
+        ["d_state", d_state],
+        ["channel_sharing", [False]],
+        ["num_triggers", [1, ]],
+        ["bidirectional", [False]],
     ]
 
     tasks = []
-    for i, config in enumerate(experiments(settings_options)):
+    for i, config in enumerate(experiments(settings_options_small)):
         print(i)
-        config.update({"comment": ""})
+        config.update({"comment": "comment in no re_init dt bias"})
         tasks.append(run_experiment.remote(Config(**config), progress_bar_actor))
+    # for i, config in enumerate(experiments(settings_options_s4)):
+    #     print(i)
+    #     config.update({"comment": "comment in no re_init dt bias"})
+    #     tasks.append(run_experiment.remote(Config(**config), progress_bar_actor))
+    # for i, config in enumerate(experiments(settings_options_s6_real)):
+    #     print(i)
+    #     config.update({"comment": "comment in no re_init dt bias"})
+    #     tasks.append(run_experiment.remote(Config(**config), progress_bar_actor))
 
-    for i, config in enumerate(experiments(settings_options_s6_complex)):
-        print(i)
-        config.update({"comment": ""})
-        tasks.append(run_experiment.remote(Config(**config), progress_bar_actor))
     pb.set_total(len(tasks))
     pb.print_until_done()
     print("finished running all")
