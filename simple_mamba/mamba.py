@@ -381,10 +381,11 @@ class MambaBlock(nn.Module):
                                       bidirectional=self.config.bidirectional
                                       )
         elif config.ssm_type == "conv":
+            inner_conv_state = config.d_state*3
             self.ssm_kernel = nn.Conv1d(in_channels=config.d_inner, out_channels=config.d_inner,
-                                        kernel_size=config.d_state, bias=False,
+                                        kernel_size=inner_conv_state, bias=False,
                                         groups=config.d_inner,
-                                        padding=config.d_state - 1)
+                                        padding=inner_conv_state - 1)
         else:
             print("type", config.ssm_type)
             raise NotImplementedError
