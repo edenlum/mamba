@@ -93,10 +93,44 @@ class DynamicCategoricalDataset(Dataset):
         if self.lag < self.seq_len:
             labels[self.lag:] = data[:-self.lag]
         return torch.tensor(data, dtype=torch.long), torch.tensor(labels, dtype=torch.long)
-    
+
+
+class DynamicRepeatDataset(Dataset):
+    def __init__(self, amount_of_examples, cat_num, lag, auto_regressive):
+        """
+        Initialize the dataset with the parameters for data generation.
+        Args:
+            amount_of_examples (int): The total number of examples (data points).
+            seq_len (int): The length of each sequence.
+            cat_num (int): The number of categories for each element in the sequence.
+            lag (int): The number of steps to shift the data for label generation.
+        """
+        self.amount_of_examples = amount_of_examples
+        self.cat_num = cat_num
+        self.lag = lag
+        self.auto_regressive = auto_regressive
+
+    def __len__(self):
+        """
+        Return the total number of examples you want the loader to simulate.
+        """
+        return self.amount_of_examples
+
+    def __getitem__(self, idx):
+        """
+        Generates a single data point on demand.
+        """
+        seq_len = 2 * self.lag - 1
+        data = np.random.randint(0, self.cat_num, size=(seq_len,))
+        if self.auto_regressive:
+            data[-self.lag + 1:] = data[:self.lag - 1]
+        labels = np.zeros_like(data)
+        labels[self.lag:] = data[1:-self.lag + 1]
+        return torch.tensor(data, dtype=torch.long), torch.tensor(labels, dtype=torch.long)
+
 
 class InductionHead(Dataset):
-    def __init__(self, amount_of_examples, seq_len, cat_num, num_triggers, induction_length):
+    def __init__(self, amount_of_examples, seq_len, cat_num, num_triggers, induction_length, copy_at_end = True):
         """
         Initialize the Induction Head dataset with the parameters for data generation.
         Args:
@@ -112,6 +146,7 @@ class InductionHead(Dataset):
         self.num_triggers = num_triggers
         self.induction_length = induction_length
         self.copy_token = 0
+        self.copy_at_end = copy_at_end
 
     def __len__(self):
         """
@@ -124,7 +159,8 @@ class InductionHead(Dataset):
         Generates a single data point on demand.
         """
         data = np.random.randint(1, self.cat_num, size=(self.seq_len,))
-        data = np.append(data, 0)
+        if self.copy_at_end:
+            data = np.append(data, 0)
         copy_indices = np.random.choice(np.arange(0, self.seq_len - (1 + self.induction_length)), size=self.num_triggers, replace=False)
         copy_indices_filtered = []
         for i, p in enumerate(copy_indices):

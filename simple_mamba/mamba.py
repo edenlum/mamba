@@ -116,7 +116,7 @@ class ResidualBlock(nn.Module):
         super().__init__()
 
         self.mixer = MambaBlock(config)
-        self.norm = RMSNorm(config.d_model)
+        #self.norm = RMSNorm(config.d_model)
         # for param in self.norm.parameters():
         #     param.requires_grad = False
 
@@ -125,7 +125,7 @@ class ResidualBlock(nn.Module):
 
         #  output : (B, L, D)
 
-        output = self.mixer(self.norm(x)) + x
+        output = self.mixer(x)#  + x
         return output
 
     def step(self, x, cache):
@@ -406,15 +406,16 @@ class MambaBlock(nn.Module):
 
         _, L, _ = x.shape
 
-        xz = self.in_proj(x)  # (B, L, 2*ED)
-        x, z = xz.chunk(2, dim=-1)  #  (B, L, ED), (B, L, ED)
+        #xz = self.in_proj(x)  # (B, L, 2*ED)
+        #x, z = xz.chunk(2, dim=-1)  #  (B, L, ED), (B, L, ED)
+        z = torch.ones_like(x,device=x.device, dtype=x.dtype)
 
         #  x branch
         x = x.transpose(1, 2)  #  (B, ED, L)
-        x = self.conv1d(x)[:, :, :L]  #  depthwise convolution over time, with a short filter
+        #x = self.conv1d(x)[:, :, :L]  #  depthwise convolution over time, with a short filter
         x = x.transpose(1, 2)  #  (B, L, ED)
 
-        x = F.silu(x)
+        #x = F.silu(x)
         y = self.ssm(x, z)
 
         if self.config.use_cuda:
@@ -422,9 +423,9 @@ class MambaBlock(nn.Module):
             return output
 
         #  z branch
-        z = F.silu(z)
-        output = y * z
-        output = self.out_proj(output)  #  (B, L, D)
+        #z = F.silu(z)
+        output = y# * z
+        output = output #self.out_proj(output)  #  (B, L, D)
 
         return output
 

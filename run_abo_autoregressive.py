@@ -107,6 +107,9 @@ def train(config, model, data_loader, optimizer):
     # Setup tqdm for the outer loop
     # pbar = tqdm(total=config.epochs, desc="Epoch Progress", position=0)
 
+    nr_params = sum(p.numel() for p in model.parameters())
+    wandb.log({"params": nr_params})
+
     # Training Loop
     losses = []
     for epoch in range(config.epochs):
@@ -114,6 +117,9 @@ def train(config, model, data_loader, optimizer):
         total_correct_tokens = 0
         total_tokens = 0
         total_correct_sequences = 0
+        first_token_correct_count = 0
+        last_token_correct_count = 0
+        mid_token_correct_count = 0
         for data, labels in data_loader:
             data = data.to(device).long()  # Ensure data is on the correct device and dtype
             labels = labels.to(device).long()  # Ensure labels are on the correct device and converted to long
@@ -148,19 +154,27 @@ def train(config, model, data_loader, optimizer):
             correct_sequences = (relevant_predicted == relevant_labels).all(dim=1).sum()
             total_correct_sequences += correct_sequences.item()
 
+            first_token_correct_count += (relevant_predicted[:, 0] == relevant_labels[:, 0]).sum().item()
+            last_token_correct_count += (relevant_predicted[:, -1] == relevant_labels[:, -1]).sum().item()
+            mid_idx = relevant_predicted.shape[1]//2
+            mid_token_correct_count += (relevant_predicted[:, mid_idx] == relevant_labels[:, mid_idx]).sum().item()
+
         total_sequences = sum(len(labels) for _, labels in data_loader)
         avg_loss /= len(data_loader)
         avg_accuracy_per_token = total_correct_tokens / total_tokens
         avg_accuracy_per_sequence = total_correct_sequences / total_sequences
+        first_token_accuracy = first_token_correct_count / total_sequences
+        last_token_accuracy = last_token_correct_count / total_sequences
+        mid_token_accuracy = mid_token_correct_count / total_sequences
 
         losses.append(avg_loss)
         # Log metrics
         wandb.log({
-            "epoch": epoch,
             "loss": avg_loss,
-            "min_loss": np.min(losses),
             "avg_accuracy_per_token": avg_accuracy_per_token,
-            "avg_accuracy_per_sequence": avg_accuracy_per_sequence
+            "first_token_accuracy":first_token_accuracy,
+            "last_token_accuracy": last_token_accuracy,
+            "mid_token_accuracy": mid_token_accuracy,
         })
 
         if config.stop_on_loss and avg_loss < config.stop_on_loss:
@@ -186,7 +200,6 @@ class Config:
     n_layers: int
     n_categories: int
     lag: int
-    extra: int
     batch_size: int
     epoch_size: int
     epochs: int
@@ -196,6 +209,8 @@ class Config:
     comment: str
     bias:bool
     bidirectional: bool
+    auto_regressive: bool
+    expand_factor: int
 
 def experiments(kwargs):
     import itertools
@@ -212,7 +227,7 @@ def experiments(kwargs):
 def run_experiment(config, progress_bar_actor):
     import traceback
     import numpy as np
-    from ds.datasets import DynamicCategoricalDataset
+    from ds.datasets import DynamicRepeatDataset
     from torch import optim
     from simple_mamba.mamba_lm import MambaLM, MambaLMConfig
     import wandb
@@ -222,7 +237,7 @@ def run_experiment(config, progress_bar_actor):
         exp_name = name(config)
 
         wandb.init(
-            project="Delay-Article-V1-Final",
+            project="abo_autoregressiveness",
             entity="yuv-milo",
             name=exp_name,
             config=config
@@ -248,17 +263,25 @@ def run_experiment(config, progress_bar_actor):
             deterministic = config.deterministic,
             bias=config.bias,
             pscan = config.pscan,
-            bidirectional = config.bidirectional
+            bidirectional = config.bidirectional,
+            expand_factor = config.expand_factor,
+            d_conv = 1,
         )
 
-        dataset = DynamicCategoricalDataset(config.epoch_size,
-                                            config.extra + config.lag,
-                                            config.n_categories,
-                                            config.lag)
+        # dataset = DynamicCategoricalDataset(config.epoch_size,
+        #                                     config.extra + config.lag,
+        #                                     config.n_categories,
+        #                                     config.lag)
+        dataset = DynamicRepeatDataset(
+            amount_of_examples=config.epoch_size,
+            cat_num=config.n_categories,
+            lag=config.lag,
+            auto_regressive=config.auto_regressive
+        )
         data_loader = torch.utils.data.DataLoader(dataset,
                                                   batch_size=config.batch_size,
                                                   shuffle=True)
-        model = MambaLM(mamba_config).to(device)
+        model = MambaLM(mamba_config, use_onehots=True, no_lm_head=True).to(device)
         optimizer = optim.Adam(model.parameters(), lr=config.lr)
         train(config, model, data_loader, optimizer)
     except Exception:
@@ -268,7 +291,7 @@ def run_experiment(config, progress_bar_actor):
 
 def name(config):
     # short name for display on wandb
-    return f"{config.ssm_type}-lag{config.lag}-extra{config.extra}-disc{config.discretizationA}-{config.discretizationB}"
+    return f"{config.ssm_type}-lag{config.lag}-auto{config.auto_regressive}-disc{config.discretizationA}-{config.discretizationB}"
 
 def main():
     ray.init(num_cpus=64, ignore_reinit_error=True)
@@ -276,54 +299,50 @@ def main():
     progress_bar_actor = pb.actor
 
     batch_size = 8
-    n_categories = 16
+    n_categories = 2
     epochs = 1000
-    # Check where S4-Complex Fails
-    lags = [256]
-    extras = [256]
 
     tasks = []
-    for l in [64]:
+    for l in [512,]:
         lags = [l,]
-        extras = [l, ]
 
-        settings_options_s6 = [
-            ["initA_real", ["S4"]],
-            ["seed", [2, 3, 4]],
-            ["ssm_type", ["S6-Real", "S6-Complex"]],
-            ["discretizationA", ["normal"]],
-            ["discretizationB", ["s6"]],
-            ["d_model", [64]],
-            ["d_state", [16]],
-            ["lag", lags],
-            ["extra", extras],
-            ["n_layers", [2]],
-            ["n_categories", [n_categories]],
-            ["batch_size", [batch_size]],
-            ["epochs", [epochs]],  # [int(1600 * 6]],
-            ["epoch_size", [8192]],
-            ["lr", [1e-3]],
-            ["stop_on_loss", [0]],
-            ["param_A_imag", ["normal", ]],
-            ["A_imag_using_weight_decay", ["True", ]],
-            ["deterministic", [False]],
-            ["pscan", [True]],
-            ["bias", [False]],
-            ["initA_imag", ["S4"]],
-            ["dt_is_selective", [True]],
-            ["discretizationB", ["s6"]],
-            ["channel_sharing", [True]],
-            ["bidirectional", [False]],
-        ]
+        # settings_options_s6 = [
+        #     ["initA_real", ["S4"]],
+        #     ["seed", [2, 3]],
+        #     ["ssm_type", ["S6-Real", "S6-Complex"]],
+        #     ["discretizationA", ["normal"]],
+        #     ["discretizationB", ["s6"]],
+        #     ["d_model", [64]],
+        #     ["d_state", [16]],
+        #     ["lag", lags],
+        #     ["auto_regressive", [True, False]],
+        #     ["n_layers", [1]],
+        #     ["n_categories", [n_categories]],
+        #     ["batch_size", [batch_size]],
+        #     ["epochs", [epochs]],  # [int(1600 * 6]],
+        #     ["epoch_size", [8192]],
+        #     ["lr", [1e-3]],
+        #     ["stop_on_loss", [0]],
+        #     ["param_A_imag", ["normal", ]],
+        #     ["A_imag_using_weight_decay", ["True", ]],
+        #     ["deterministic", [False]],
+        #     ["pscan", [True]],
+        #     ["bias", [False]],
+        #     ["initA_imag", ["S4"]],
+        #     ["dt_is_selective", [True, False]],
+        #     ["discretizationB", ["s6"]],
+        #     ["channel_sharing", [True]],
+        #     ["bidirectional", [False]],
+        # ]
 
-        settings_options_s4 = [
-            ["seed", [2, 3, 4]],
-            ["ssm_type", ["S4D-Complex", "S4D-Real"]],
+        settings_options_s41 = [
+            ["seed", [i for i in range(12)]],
+            ["ssm_type",  ["S4D-Complex"]],#"S4D-Complex", "S4D-Real"]],
             ["discretizationA", ["normal"]],
-            ["d_model", [64]],
+            ["d_model", [1]],
             ["lag", lags],
-            ["extra", extras],
-            ["n_layers", [2]],
+            ["auto_regressive", [True, False]],
+            ["n_layers", [1,]],
             ["n_categories", [n_categories]],
             ["batch_size", [batch_size]],
             ["epochs", [epochs]],  # [int(1600 * 6]],
@@ -339,19 +358,112 @@ def main():
             ["initA_real", ["S4", ]],
             ["dt_is_selective", [False]],
             ["discretizationB", ["s6"]],
-            ["d_state", [16]],
+            ["d_state", [128]],
             ["channel_sharing", [False]],
             ["bidirectional", [False]],
+            ["expand_factor", [1]]
         ]
 
-        for i, config in enumerate(experiments(settings_options_s4)):
+        # settings_options_s42 = [
+        #     ["seed", [2, 3]],
+        #     ["ssm_type", ["S4D-Complex", ]],  # "S4D-Complex", "S4D-Real"]],
+        #     ["discretizationA", ["normal"]],
+        #     ["d_model", [3]],
+        #     ["lag", lags],
+        #     ["auto_regressive", [True, False]],
+        #     ["n_layers", [1, ]],
+        #     ["n_categories", [n_categories]],
+        #     ["batch_size", [batch_size]],
+        #     ["epochs", [epochs]],  # [int(1600 * 6]],
+        #     ["epoch_size", [8192]],
+        #     ["lr", [1e-3]],
+        #     ["stop_on_loss", [0]],
+        #     ["param_A_imag", ["normal", ]],
+        #     ["A_imag_using_weight_decay", ["True", ]],
+        #     ["deterministic", [False]],
+        #     ["pscan", [True]],
+        #     ["bias", [False]],
+        #     ["initA_imag", ["S4", ]],
+        #     ["initA_real", ["S4", ]],
+        #     ["dt_is_selective", [False]],
+        #     ["discretizationB", ["s6"]],
+        #     ["d_state", [86*2]],
+        #     ["channel_sharing", [False]],
+        #     ["bidirectional", [False]],
+        # ]
+        #
+        # settings_options_s43 = [
+        #     ["seed", [2, 3]],
+        #     ["ssm_type", ["S4D-Complex", ]],  # "S4D-Complex", "S4D-Real"]],
+        #     ["discretizationA", ["normal"]],
+        #     ["d_model", [24]],
+        #     ["lag", lags],
+        #     ["auto_regressive", [True, False]],
+        #     ["n_layers", [1, ]],
+        #     ["n_categories", [n_categories]],
+        #     ["batch_size", [batch_size]],
+        #     ["epochs", [epochs]],  # [int(1600 * 6]],
+        #     ["epoch_size", [8192]],
+        #     ["lr", [1e-3]],
+        #     ["stop_on_loss", [0]],
+        #     ["param_A_imag", ["normal", ]],
+        #     ["A_imag_using_weight_decay", ["True", ]],
+        #     ["deterministic", [False]],
+        #     ["pscan", [True]],
+        #     ["bias", [False]],
+        #     ["initA_imag", ["S4", ]],
+        #     ["initA_real", ["S4", ]],
+        #     ["dt_is_selective", [False]],
+        #     ["discretizationB", ["s6"]],
+        #     ["d_state", [2]],
+        #     ["channel_sharing", [False]],
+        #     ["bidirectional", [False]],
+        # ]
+        #
+        # settings_options_s44 = [
+        #     ["seed", [2, 3]],
+        #     ["ssm_type", ["S4D-Real", ]],  # "S4D-Complex", "S4D-Real"]],
+        #     ["discretizationA", ["normal"]],
+        #     ["d_model", [28]],
+        #     ["lag", lags],
+        #     ["auto_regressive", [True, False]],
+        #     ["n_layers", [1, ]],
+        #     ["n_categories", [n_categories]],
+        #     ["batch_size", [batch_size]],
+        #     ["epochs", [epochs]],  # [int(1600 * 6]],
+        #     ["epoch_size", [8192]],
+        #     ["lr", [1e-3]],
+        #     ["stop_on_loss", [0]],
+        #     ["param_A_imag", ["normal", ]],
+        #     ["A_imag_using_weight_decay", ["True", ]],
+        #     ["deterministic", [False]],
+        #     ["pscan", [True]],
+        #     ["bias", [False]],
+        #     ["initA_imag", ["S4", ]],
+        #     ["initA_real", ["S4", ]],
+        #     ["dt_is_selective", [False]],
+        #     ["discretizationB", ["s6"]],
+        #     ["d_state", [1]],
+        #     ["channel_sharing", [False]],
+        #     ["bidirectional", [False]],
+        # ]
+
+        for i, config in enumerate(experiments(settings_options_s41)):
             print(i)
             config.update({"comment": "comment in no re_init dt bias"})
             tasks.append(run_experiment.remote(Config(**config), progress_bar_actor))
-        for i, config in enumerate(experiments(settings_options_s6)):
-            print(i)
-            config.update({"comment": "comment in no re_init dt bias"})
-            tasks.append(run_experiment.remote(Config(**config), progress_bar_actor))
+        # for i, config in enumerate(experiments(settings_options_s42)):
+        #     print(i)
+        #     config.update({"comment": "comment in no re_init dt bias"})
+        #     tasks.append(run_experiment.remote(Config(**config), progress_bar_actor))
+        # for i, config in enumerate(experiments(settings_options_s43)):
+        #     print(i)
+        #     config.update({"comment": "comment in no re_init dt bias"})
+        #     tasks.append(run_experiment.remote(Config(**config), progress_bar_actor))
+        # for i, config in enumerate(experiments(settings_options_s44)):
+        #     print(i)
+        #     config.update({"comment": "comment in no re_init dt bias"})
+        #     tasks.append(run_experiment.remote(Config(**config), progress_bar_actor))
     pb.set_total(len(tasks))
     pb.print_until_done()
     print("finished running all")

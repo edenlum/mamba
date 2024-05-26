@@ -1805,7 +1805,7 @@ class FFTConv(nn.Module):
 
 
         # Compute D term in state space equation - essentially a skip connection
-        y = y + contract('bhl,ch->bchl', x, self.D)
+        # y = y + contract('bhl,ch->bchl', x, self.D)
 
         # # Compute state update
         # if state is not None:

@@ -84,25 +84,36 @@ def from_pretrained(name: str):
     return model
 
 class MambaLM(nn.Module):
-    def __init__(self, lm_config: MambaLMConfig):
+    def __init__(self, lm_config: MambaLMConfig, use_onehots = False, no_lm_head = False):
         super().__init__()
         self.lm_config = lm_config
         self.config = lm_config.to_mamba_config()
+        self.use_onehots = use_onehots
+        self.no_lm_head = no_lm_head
+        self.vocab_size = self.lm_config.vocab_size
 
-        self.embedding = nn.Embedding(self.lm_config.vocab_size, self.config.d_model)
-        for param in self.embedding.parameters():
-            param.requires_grad = False
+        if not use_onehots:
+            self.embedding = nn.Embedding(self.lm_config.vocab_size, self.config.d_model)
+            for param in self.embedding.parameters():
+                param.requires_grad = True
+        else:
+            pass#assert self.lm_config.vocab_size == self.config.d_model
 
         self.mamba = Mamba(self.config)
         self.norm_f = RMSNorm(self.config.d_model)
         for param in self.norm_f.parameters():
             param.requires_grad = True
 
-        self.lm_head = nn.Linear(self.config.d_model, self.lm_config.vocab_size, bias=False)
-        # self.lm_head.requires_grad = True
-        # for param in self.lm_head.parameters():
-        #     param.requires_grad = True
-        self.lm_head.weight = self.embedding.weight
+        if not no_lm_head:
+            self.lm_head = nn.Linear(self.config.d_model, self.lm_config.vocab_size, bias=False)
+            # self.lm_head.requires_grad = True
+            # for param in self.lm_head.parameters():
+            #     param.requires_grad = True
+            if not use_onehots:
+                self.lm_head.weight = self.embedding.weight
+        else:
+            #assert self.lm_config.vocab_size == self.config.d_model
+            pass
 
 
     def forward(self, tokens):
@@ -110,12 +121,30 @@ class MambaLM(nn.Module):
 
         # logits : (B, L, vocab_size)
 
-        x = self.embedding(tokens)
+        if not self.use_onehots:
+            x = self.embedding(tokens)
+        else:
+            #x = torch.nn.functional.one_hot(tokens, num_classes=self.vocab_size).to(torch.float32)
+            assert self.vocab_size == 2
+            x = tokens * 2 - 1
+            x = x.float()
+            # Expand x_mapped to have an additional dimension of size vocab_size
+            # All values in this new dimension are copied from x_mapped
+            # Resulting shape [batch_size, sequence_length, vocab_size]
+            x = x.unsqueeze(-1).expand(-1, -1, 1)
 
         x = self.mamba(x)
-        x = self.norm_f(x)
 
-        logits = self.lm_head(x)
+        if not self.no_lm_head:
+            # x = self.norm_f(x)
+            logits = self.lm_head(x)
+        else:
+            #logits = self.lm_head(x)
+            #logits = torch.zeros_like(logits)
+            zeros = torch.zeros(x.shape[0], x.shape[1], 1, device=x.device, dtype=x.dtype)
+            logits = torch.cat([x   , zeros], dim=-1)  # Shape becomes (a, b, 2)
+            #logits = torch.zeros([x.shape[0],x.shape[1],2],)
+            #logits[: ,: , 0] = x[:,:,0]
 
         return logits
     
@@ -126,12 +155,19 @@ class MambaLM(nn.Module):
         # logits : (B, vocab_size)
         # caches : [cache(layer) for all layers], cache : (h, inputs)
 
-        x = self.embedding(token)
+        # x = self.embedding(token)
+        if not self.use_onehots:
+            x = self.embedding(tokens)
+        else:
+            x = torch.nn.functional.one_hot(tokens, num_classes=self.vocab_size).to(torch.float32)
 
         x, caches = self.mamba.step(x, caches)
         x = self.norm_f(x)
 
-        logits = self.lm_head(x)
+        if not self.no_lm_head:
+            logits = self.lm_head(x)
+        else:
+            logits = x
 
         return logits, caches
     
