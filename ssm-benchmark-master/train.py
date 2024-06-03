@@ -4,7 +4,7 @@ import wandb
 from tqdm import tqdm
 import yaml
 from .dataloaders import SequenceDataset
-from ..utils import override_config
+from utils import override_config
 
 from .models import Mamba
 
@@ -111,7 +111,6 @@ if __name__ == "__main__":
 
     print("\nCONFIG:")
     print(yaml.dump(args))
-    raise RuntimeError("STOP")
 
     # split configs
     data_config = args["dataset"]

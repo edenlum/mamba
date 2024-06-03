@@ -1,0 +1,25 @@
+seed: 1
+wandb:
+   entity: "complex-team"
+   project: "InductionExtrapolation"
+dataset:
+  name: "induction_head"
+  epoch_size: 8192
+  seq_len: 256
+  n_categories: 16
+  num_triggers: 1
+  induction_len: 1
+  auto_regressive: true, false
+train:
+  num_epochs: 100
+  batch_size: 8
+  lr: 0.001
+  stop_on_loss: 0.001
+model:
+  n_layers: 2
+  d_model: 64
+  d_state: 16
+  ssm_type: "S4D-Real"
+  vocab_size: 16
+  pad_vocab_size_multiple: 16
+  bidirectional: false

@@ -60,7 +60,7 @@ class MambaBlock(torch.nn.Module):
 
 class Mamba(torch.nn.Module):
     def __init__(self, num_blocks, input_dim, output_dim, hidden_dim, state_dim, conv_dim, expansion, dropout, glu,
-                 norm, prenorm, dual, bidirectional, embd, pooling="mean", ssm_type="S6-Real"):
+                 norm, prenorm, dual, bidirectional, embd=False, pooling="mean", ssm_type="S6-Real"):
         super().__init__()
         self.embd = embd
         if embd:

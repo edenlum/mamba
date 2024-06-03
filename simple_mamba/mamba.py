@@ -5,13 +5,8 @@ from typing import Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
 
-
-from simple_mamba.pscan import pscan
-from s4 import SSMKernelDiag, FFTConv
-from test_selective_scan_easy import selective_scan_easyv3, selective_scan_easyv2
-from test_selective_scan import selective_scan_easy
+from s4 import FFTConv
 """
 
 This file closely follows the mamba_simple.py from the official Mamba implementation, and the mamba-minimal by @johnma2006.
@@ -214,57 +209,6 @@ class MambaBlock(nn.Module):
                 torch.log(A))  # why store A in log ? to keep A < 0 (cf -torch.exp(...)) ? for gradient stability ?
             self.D = nn.Parameter(torch.ones(config.d_inner))
 
-        elif config.ssm_type == "S6-Real-complex-bias":
-            assert self.config.channel_sharing == False
-
-            self.BC_dims = config.d_state * config.d_inner
-
-            #  projects x to input-dependent Δ, B, C
-            # self.x_proj = nn.Linear(config.d_inner, config.dt_rank + 2 * self.BC_dims, bias=False)
-            #
-            # self.x_proj = nn.Linear(config.d_inner, config.dt_rank + 2 * self.BC_dims, bias=False)
-
-            if config.deterministic:
-                torch.manual_seed(1)
-            C_bias = torch.randn(config.d_inner, config.d_state, dtype=torch.cfloat)
-            if config.deterministic:
-                torch.manual_seed(10)
-            # B_bias = torch.randn(config.d_inner, config.d_state, dtype=torch.cfloat)
-            self.B_bias_real = torch.ones(config.d_inner, config.d_state, dtype=torch.float)
-            self.B_bias_imag = torch.zeros(config.d_inner, config.d_state, dtype=torch.float)
-            # self.B_bias_real = nn.Parameter(self.B_bias_real,requires_grad=False)
-            # self.B_bias_imag = nn.Parameter(self.B_bias_imag, requires_grad=False)
-            # self.C_bias_real = nn.Parameter(C_bias.real, requires_grad=False)
-            # self.C_bias_imag = nn.Parameter(-C_bias.imag, requires_grad=False)
-            self.B_bias_real = nn.Parameter(self.B_bias_real)
-            self.B_bias_imag = nn.Parameter(self.B_bias_imag)
-            self.C_bias_real = nn.Parameter(C_bias.real)
-            self.C_bias_imag = nn.Parameter(-C_bias.imag)
-            # self.C_bias_real = nn.Parameter(C_bias.real)
-            # self.C_bias_imag = nn.Parameter(-C_bias.imag)
-
-            #  dt initialization
-            #  dt weights
-            if config.deterministic:
-                torch.manual_seed(2)
-            inv_dt = torch.rand(config.d_inner) * (math.log(config.dt_max) - math.log(config.dt_min)) + math.log(
-                config.dt_min)
-            #self.inv_dt = nn.Parameter(inv_dt, requires_grad = False)
-            self.inv_dt = nn.Parameter(inv_dt, requires_grad=True)
-
-            A = 1/2 + 0*torch.arange(1, config.d_state + 1, dtype=torch.float32).repeat(config.d_inner, 1)
-            # self.log_A_real = nn.Parameter(torch.log(A), requires_grad = False)  # why store A in log ? to keep A < 0 (cf -torch.exp(...)) ? for gradient stability ?
-            self.log_A_real = nn.Parameter(torch.log(A))
-            A_imag = math.pi * torch.arange(config.d_state).repeat(config.d_inner, 1)
-            A_imag[A_imag<1e-4] = 1e-4
-            # self.A_imag = nn.Parameter(A_imag, requires_grad = False)
-            self.A_imag = nn.Parameter(A_imag)
-
-            if config.deterministic:
-                torch.manual_seed(3)
-            # self.D = nn.Parameter(torch.randn(config.d_inner), requires_grad = False)
-            self.D = nn.Parameter(torch.randn(config.d_inner))
-
         elif config.ssm_type == "S6-Complex":
             #  projects x to input-dependent Δ, B, C
             if not config.channel_sharing:
@@ -432,40 +376,7 @@ class MambaBlock(nn.Module):
         #  x : (B, L, ED)
 
         #  y : (B, L, ED)
-        if self.config.ssm_type == "S6-Real-complex-bias":
-            D = self.D
-            A = -torch.exp(self.log_A_real) - 1j * self.A_imag  # (ED, N)
-
-
-            # deltaBC = self.x_proj(x)  #  (B, L, dt_rank+2*N)
-            #
-            # _, B, C = torch.split(deltaBC, [self.config.dt_rank, self.BC_dims, self.BC_dims],
-            #                           dim=-1)  #  (B, L, dt_rank), (B, L, N), (B, L, N)
-            #
-            b, l, ed = x.shape
-            # B = B.reshape(b, l, ed, self.config.d_state)
-            # C = C.reshape(b, l, ed, self.config.d_state)
-            B_bias = self.B_bias_real + 1j * self.B_bias_imag
-            C_bias = self.C_bias_real + 1j * self.C_bias_imag
-            B_bias = B_bias.unsqueeze(0).unsqueeze(0) # (1, 1, L, N)
-            C_bias = C_bias.unsqueeze(0).unsqueeze(0) # (1, 1, L, N)
-            if self.config.A_imag_using_weight_decay:
-                B = B_bias.expand(b, l, ed, self.config.d_state)
-                C = C_bias.expand(b, l, ed, self.config.d_state)
-            # B = B + B_bias
-            # C = C + C_bias
-
-            delta_new = torch.exp(self.inv_dt)
-            delta = delta_new.unsqueeze(0).unsqueeze(0)
-            if self.config.pscan:
-                y = self.selective_scan(x, delta, A, B, C, D)
-            else:
-                y = self.selective_scan_seq(x, delta, A, B, C, D)
-            # y = self.selective_scan_seq(x, delta, A, B, C, D)
-
-            return y.real
-
-        elif self.config.ssm_type == "S6-Real":
+        if self.config.ssm_type == "S6-Real":
             A = -torch.exp(self.A_log.float())  # (ED, N)
             D = self.D
             #  TODO remove .float()
@@ -582,7 +493,7 @@ class MambaBlock(nn.Module):
                 if self.config.dt_is_selective:
                     delta = F.softplus(delta + self.dt_proj.bias)
                 if self.config.pscan:
-                    y = self.selective_scan(x, delta, A, B, C, D)
+                    raise NotImplementedError
                 else:
                     y = self.selective_scan_seq(x, delta, A, B, C, D)
 
@@ -597,69 +508,6 @@ class MambaBlock(nn.Module):
             return out.transpose(-1, -2)
         else:
             raise NotImplementedError
-
-    def selective_scan(self, x, delta, A, B, C, D):
-        #  x : (B, L, ED)
-        #  Δ : (B, L, ED)
-        #  A : (ED, N)
-        #  B : (B, L, N)
-        #  C : (B, L, N)
-        #  D : (ED)
-
-        #  y : (B, L, ED)
-        # if self.config.discretizationA == "yuval_disc" and (self.config.ssm_type == "S6-Complex" or self.config.ssm_type == "S6-Real-complex-bias"):
-        #     deltaA = torch.exp(delta.unsqueeze(-1) * A.real + 1j * A.imag)
-        # elif self.config.discretizationA == "normal":
-        #     deltaA = torch.exp(delta.unsqueeze(-1) * A)  #  (B, L, ED, N)
-        # else:
-        #     print("disc",self.config.discretizationA)
-        #     raise NotImplementedError
-        #
-        # # if self.config.channel_sharing:
-        # #     B = B.unsqueeze(2)
-        #
-        # if self.config.discretizationB == "s6":
-        #     deltaB = delta.unsqueeze(-1) * B  #  (B, L, ED, N)
-        # elif self.config.discretizationB == "zoh":
-        #     #deltaB = B * torch.exp(delta.unsqueeze(-1) * A - 1.) / A  #  (B, L, ED, N)
-        #     deltaB = B * (torch.exp(delta.unsqueeze(-1) * A) - 1.) / A
-        #     # C = C * (torch.exp(dtA)-1.) / A
-        # else:
-        #     raise NotImplementedError
-        #
-        # BX = deltaB * (x.unsqueeze(-1))  #  (B, L, ED, N)
-        # if self.config.ssm_type == "S6-Real-complex-bias":
-        #     deltaA = deltaA.expand_as(BX)
-        # hs = pscan(deltaA, BX)
-        #
-        # # if self.config.channel_sharing:
-        # #     C = C.unsqueeze(2)
-        # y = (hs * C).sum(dim=3)  #  (B, L, ED, N) @ (B, L, N, 1) -> (B, L, ED, 1)
-        #
-        # if self.config.ssm_type == "S6-Real-complex-bias" or "S6-Complex":
-        #     y = y * 2
-        # # if self.config.ssm_type != "S6-Real-complex-bias":
-        # #     y = y + D * x
-        #
-        # y = y + D.unsqueeze(0).unsqueeze(0)*x
-        delta = delta.broadcast_to(x.shape)
-
-        x = x.transpose(1, 2).contiguous()
-        delta = delta.transpose(1, 2).contiguous()
-        B = B.permute([0, 2, 3, 1]).contiguous()
-        C = C.permute([0, 2, 3, 1]).contiguous()
-        y = selective_scan_easyv3(
-            dts=delta,
-            us=x,
-            Bs=B,
-            As=A,
-            Cs=C,
-            Ds=D,
-            chunksize=16
-        )
-        y = y.transpose(1, 2).real
-
-        return y
 
     def selective_scan_seq(self, x, delta, A, B, C, D):
         #  x : (B, L, ED)
