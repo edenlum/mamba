@@ -15,6 +15,7 @@ from ds.datasets import InductionHead, DynamicCategoricalDataset
 
 if not torch.cuda.is_available():
     raise NotImplementedError("Cannot run on CPU!")
+
 device = torch.device('cuda')
 
 
@@ -126,7 +127,7 @@ def run_experiment(config, progress_bar_actor):
             entity=wandb_config["entity"],
             project=wandb_config["project"],
             config=config,
-            name=f"{model_config['ssm_type']}-indlen-{data_config['induction_len']}"
+            name=f"{model_config['ssm_type']}"
         )
 
         torch.manual_seed(config["seed"])
@@ -147,64 +148,64 @@ def run_experiment(config, progress_bar_actor):
             test_data_config["seq_len"] = 2**i
             test_dataset, mask = get_dataset_mask(test_data_config)
             test_data_loader = torch.utils.data.DataLoader(test_dataset)
-            test_ext(model, test_data_loader, mask, test_data_config["seq_len"])
+            # test_ext(model, test_data_loader, mask, test_data_config["seq_len"])
     except Exception as e:
         print(progress_bar_actor, "fail:", traceback.format_exc())
     progress_bar_actor.update.remote()
     wandb.finish()
 
 
-def test_ext(model, data_loader, mask, seq_len):
-    model.eval()
-    avg_loss = 0
-    total_correct_tokens = 0
-    total_tokens = 0
-    total_correct_sequences = 0
-    first_token_correct_count = 0
-    last_token_correct_count = 0
-    with torch.no_grad():
-        for data, labels in data_loader:
-            data = data.to(device).long()  # Ensure data is on the correct device and dtype
-            labels = labels.to(device).long()  # Ensure labels are on the correct device and converted to long
-
-            # Forward pass
-            logits = model(data)  # [batch_size, seq_len, cat_num]
-
-            # Calculate predictions
-            _, predicted = torch.max(logits, dim=2)  # [batch_size, seq_len]
-
-            # Mask to focus only on relevant positions
-            relevant_labels = labels[:, mask:]
-            relevant_predicted = predicted[:, mask:]
-
-            # Calculate correct predictions per token
-            correct_tokens = (relevant_predicted == relevant_labels).sum()
-            total_correct_tokens += correct_tokens.item()
-            total_tokens += relevant_labels.numel()  # Total number of evaluated tokens
-
-            # Calculate correct predictions per sequence
-            correct_sequences = (relevant_predicted == relevant_labels).all(dim=1).sum()
-            total_correct_sequences += correct_sequences.item()
-
-            # Accuracy for the first and last tokens in the sequence
-            first_token_correct_count += (relevant_predicted[:, 0] == relevant_labels[:, 0]).sum().item()
-            last_token_correct_count += (relevant_predicted[:, -1] == relevant_labels[:, -1]).sum().item()
-
-    total_sequences = sum(len(labels) for _, labels in data_loader)
-    avg_loss /= len(data_loader)
-    avg_accuracy_per_token = total_correct_tokens / total_tokens
-    avg_accuracy_per_sequence = total_correct_sequences / total_sequences
-    first_token_accuracy = first_token_correct_count / total_sequences
-    last_token_accuracy = last_token_correct_count / total_sequences
-    wandb.log({
-        "seq_len": seq_len,
-        "avg_loss_test": avg_loss,
-        "avg_accuracy_per_token_test": avg_accuracy_per_token,
-        "avg_accuracy_per_sequence_test": avg_accuracy_per_sequence,
-        "first_token_accuracy_test": first_token_accuracy,
-        "last_token_accuracy_test": last_token_accuracy
-    })
-    return avg_accuracy_per_token, avg_accuracy_per_sequence
+# def test_ext(model, data_loader, mask, seq_len):
+#     model.eval()
+#     avg_loss = 0
+#     total_correct_tokens = 0
+#     total_tokens = 0
+#     total_correct_sequences = 0
+#     first_token_correct_count = 0
+#     last_token_correct_count = 0
+#     with torch.no_grad():
+#         for data, labels in data_loader:
+#             data = data.to(device).long()  # Ensure data is on the correct device and dtype
+#             labels = labels.to(device).long()  # Ensure labels are on the correct device and converted to long
+#
+#             # Forward pass
+#             logits = model(data)  # [batch_size, seq_len, cat_num]
+#
+#             # Calculate predictions
+#             _, predicted = torch.max(logits, dim=2)  # [batch_size, seq_len]
+#
+#             # Mask to focus only on relevant positions
+#             relevant_labels = labels[:, mask:]
+#             relevant_predicted = predicted[:, mask:]
+#
+#             # Calculate correct predictions per token
+#             correct_tokens = (relevant_predicted == relevant_labels).sum()
+#             total_correct_tokens += correct_tokens.item()
+#             total_tokens += relevant_labels.numel()  # Total number of evaluated tokens
+#
+#             # Calculate correct predictions per sequence
+#             correct_sequences = (relevant_predicted == relevant_labels).all(dim=1).sum()
+#             total_correct_sequences += correct_sequences.item()
+#
+#             # Accuracy for the first and last tokens in the sequence
+#             first_token_correct_count += (relevant_predicted[:, 0] == relevant_labels[:, 0]).sum().item()
+#             last_token_correct_count += (relevant_predicted[:, -1] == relevant_labels[:, -1]).sum().item()
+#
+#     total_sequences = sum(len(labels) for _, labels in data_loader)
+#     avg_loss /= len(data_loader)
+#     avg_accuracy_per_token = total_correct_tokens / total_tokens
+#     avg_accuracy_per_sequence = total_correct_sequences / total_sequences
+#     first_token_accuracy = first_token_correct_count / total_sequences
+#     last_token_accuracy = last_token_correct_count / total_sequences
+#     wandb.log({
+#         "seq_len": seq_len,
+#         "avg_loss_test": avg_loss,
+#         "avg_accuracy_per_token_test": avg_accuracy_per_token,
+#         "avg_accuracy_per_sequence_test": avg_accuracy_per_sequence,
+#         "first_token_accuracy_test": first_token_accuracy,
+#         "last_token_accuracy_test": last_token_accuracy
+#     })
+#     return avg_accuracy_per_token, avg_accuracy_per_sequence
 
 def main():
     parser = argparse.ArgumentParser()
@@ -231,9 +232,17 @@ def main():
 
     tasks = []
     settings_options = [
+        ["d_state", [16]],
+        ["seed", [4]],
+        # ["dataset.induction_len", [16, 32, 64, 128, 255]],
+        # ["dataset.auto_regressive", [True]],
+        # ["model.S4_init", ["diag-lin", "legs", "diag-real", "diag-legs", "diag-random"]],
+        ["model.bias", [False]],
+        ["model.B_is_selective", [True, False]],
+        ["model.C_is_selective", [True, False]],
+        ["model.dt_is_selective", [False, True]],
+        ["model.channel_sharing", [False]],
         ["model.ssm_type", ["S6-Real", "S6-Complex"]],
-        ["dataset.induction_len", [16, 32, 64, 128, 255]],
-        ["dataset.auto_regressive", [True]],
     ]
     for config in experiments(settings_options):
         config.update({"comment": ""})
@@ -241,6 +250,7 @@ def main():
         print("\nCONFIG:")
         print(yaml.dump(config))
         tasks.append(run_experiment.remote(config, progress_bar_actor))
+        # tasks.append(run_experiment(config, progress_bar_actor))
     pb.set_total(len(tasks))
     pb.print_until_done()
     print("finished running all")

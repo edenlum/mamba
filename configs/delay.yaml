@@ -1,14 +1,15 @@
 seed: 1
 wandb:
    entity: "complex-team"
-   project: "Delay+copy_token"
+   project: "InductionHead_new"
 dataset:
   name: "delay"
   epoch_size: 1024
-  lag: 256
+  lag: 64
   n_categories: 16
-  extra: 256
+  extra: 64
   auto_regressive: false
+  copy_token: false
 train:
   num_epochs: 5000
   batch_size: 8
