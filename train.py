@@ -8,6 +8,8 @@ import wandb
 import yaml
 import traceback
 from copy import deepcopy
+import pickle
+import os
 
 from utils import ProgressBar, override_config, experiments
 from simple_mamba import MambaLM, MambaLMConfig
@@ -19,7 +21,7 @@ if not torch.cuda.is_available():
 device = torch.device('cuda')
 
 
-def train(config, model, data_loader, optimizer, mask):
+def train(config, model, data_loader, optimizer, mask, save_one_step_file=None):
     losses = []
     for epoch in range(config["train"]["num_epochs"]):
         avg_loss = 0
@@ -66,6 +68,13 @@ def train(config, model, data_loader, optimizer, mask):
             # Accuracy for the first and last tokens in the sequence
             first_token_correct_count += (relevant_predicted[:, 0] == relevant_labels[:, 0]).sum().item()
             last_token_correct_count += (relevant_predicted[:, -1] == relevant_labels[:, -1]).sum().item()
+
+            if save_one_step_file is not None:
+                os.makedirs(os.path.dirname(save_one_step_file), exist_ok=True)
+                torch.save(model.state_dict(), f'{save_one_step_file}.pth')
+                with open(f'{save_one_step_file}.pkl', 'wb') as file:
+                    pickle.dump([logits, loss], file)
+                return
 
         total_sequences = sum(len(labels) for _, labels in data_loader)
         avg_loss /= len(data_loader)
@@ -115,8 +124,8 @@ def get_dataset_mask(data_config):
     return dataset, mask
 
 
-@ray.remote(num_gpus=0.5)
-def run_experiment(config, progress_bar_actor):
+# @ray.remote(num_gpus=0.5)
+def run_experiment(config, progress_bar_actor, file=None):
     try:
         wandb_config = config["wandb"]
         model_config = config["model"]
@@ -130,6 +139,10 @@ def run_experiment(config, progress_bar_actor):
             name=f"{model_config['ssm_type']}"
         )
 
+        if file is not None:
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+
         torch.manual_seed(config["seed"])
         np.random.seed(config["seed"])
         mamba_config = MambaLMConfig(**model_config)
@@ -141,14 +154,15 @@ def run_experiment(config, progress_bar_actor):
                                                   shuffle=True)
 
         optimizer = optim.Adam(model.parameters(), lr=train_config["lr"])
-        train(config, model, data_loader, optimizer, mask)
+        train(config, model, data_loader, optimizer, mask, save_one_step_file=file)
 
         for i in range(6, 21):
             test_data_config = deepcopy(data_config)
-            test_data_config["seq_len"] = 2**i
+            test_data_config["seq_len"] = 2 ** i
             test_dataset, mask = get_dataset_mask(test_data_config)
             test_data_loader = torch.utils.data.DataLoader(test_dataset)
             # test_ext(model, test_data_loader, mask, test_data_config["seq_len"])
+
     except Exception as e:
         print(progress_bar_actor, "fail:", traceback.format_exc())
     progress_bar_actor.update.remote()
@@ -212,6 +226,7 @@ def main():
     parser.add_argument("--config", type=str, required=True, help="experiment config file")
     parser.add_argument('--overrides', nargs='*', default=[],
                         help='Provide overrides as key=value pairs (e.g., model.ssm_type="S4D-Complex").')
+    parser.add_argument("--file", type=str, default=None, help="One step file to save")
     config = parser.parse_args().config
     overrides = parser.parse_args().overrides
     print(f"\nUsing config {config}")
@@ -224,33 +239,35 @@ def main():
         except yaml.YAMLError as exc:
             raise RuntimeError(exc)
 
-    ray.init(num_cpus=64, ignore_reinit_error=True)
+    # ray.init(num_cpus=64, ignore_reinit_error=True)
     pb = ProgressBar()
     progress_bar_actor = pb.actor
     if "wandb" in base_config and "api_key" in base_config["wandb"]:
         wandb.login(key=base_config["wandb"]["api_key"])
 
     tasks = []
-    settings_options = [
-        ["d_state", [16]],
-        ["seed", [4]],
-        # ["dataset.induction_len", [16, 32, 64, 128, 255]],
-        # ["dataset.auto_regressive", [True]],
-        # ["model.S4_init", ["diag-lin", "legs", "diag-real", "diag-legs", "diag-random"]],
-        ["model.bias", [False]],
-        ["model.B_is_selective", [True, False]],
-        ["model.C_is_selective", [True, False]],
-        ["model.dt_is_selective", [False, True]],
-        ["model.channel_sharing", [False]],
-        ["model.ssm_type", ["S6-Real", "S6-Complex"]],
-    ]
-    for config in experiments(settings_options):
-        config.update({"comment": ""})
-        config = override_config(base_config, [f"{k}={v}" for k, v in config.items()])
-        print("\nCONFIG:")
-        print(yaml.dump(config))
-        tasks.append(run_experiment.remote(config, progress_bar_actor))
-        # tasks.append(run_experiment(config, progress_bar_actor))
+    # settings_options = [
+    #     ["d_state", [16]],
+    #     ["seed", [4]],
+    #     # ["dataset.induction_len", [16, 32, 64, 128, 255]],
+    #     # ["dataset.auto_regressive", [True]],
+    #     # ["model.S4_init", ["diag-lin", "legs", "diag-real", "diag-legs", "diag-random"]],
+    #     ["model.bias", [False]],
+    #     ["model.B_is_selective", [True, False]],
+    #     ["model.C_is_selective", [True, False]],
+    #     ["model.dt_is_selective", [False, True]],
+    #     ["model.channel_sharing", [False]],
+    #     ["model.ssm_type", ["S6-Real", "S6-Complex"]],
+    # ]
+    # for config in experiments(settings_options):
+    #     config.update({"comment": ""})
+    #     config = override_config(base_config, [f"{k}={v}" for k, v in config.items()])
+    #     print("\nCONFIG:")
+    #     print(yaml.dump(config))
+    #     # tasks.append(run_experiment.remote(config, progress_bar_actor, file=parser.parse_args().file))
+    #     tasks.append(run_experiment(config, progress_bar_actor, file=parser.parse_args().file))
+    #     break
+    run_experiment(base_config, progress_bar_actor, file=parser.parse_args().file)
     pb.set_total(len(tasks))
     pb.print_until_done()
     print("finished running all")
