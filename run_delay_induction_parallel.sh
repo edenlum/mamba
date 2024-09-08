@@ -3,6 +3,7 @@
 # Run each script on a separate GPU
 #CUDA_VISIBLE_DEVICES=4,5,6,7 python train.py --config induction_S6_as_S4.yaml &
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 taskset -c 0-10 python train.py --config induction.yaml &
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 taskset -c 11-20 python train.py --config delay.yaml &
 #CUDA_VISIBLE_DEVICES=6 taskset -c 21-30 python train.py --config induction.yaml --overrides model.ssm_type=S4D-Real dataset.auto_regressive=True dataset.induction_len=32 dataset.seq_len=64 &
 #CUDA_VISIBLE_DEVICES=7 taskset -c 31-40 python train.py --config induction.yaml --overrides model.ssm_type=S4D-Complex dataset.auto_regressive=True dataset.induction_len=32 dataset.seq_len=64 &
 

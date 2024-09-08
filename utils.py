@@ -6,7 +6,18 @@ from asyncio import Event
 from typing import Tuple
 from tqdm import tqdm
 from copy import deepcopy
+import hashlib
+import json
 
+
+def get_hash(config):
+    # Convert the dictionary to a JSON string
+    json_data = json.dumps(config, sort_keys=True)  # sort_keys ensures consistent order
+
+    # Generate the hash (using SHA256 as an example)
+    hash_object = hashlib.sha256(json_data.encode('utf-8'))
+    hash_value = hash_object.hexdigest()
+    return hash_value
 
 @dataclass
 class Config:

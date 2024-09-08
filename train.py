@@ -10,6 +10,8 @@ import traceback
 from copy import deepcopy
 import pickle
 import os
+import hashlib
+import json
 
 from utils import ProgressBar, override_config, experiments
 from simple_mamba import MambaLM, MambaLMConfig
@@ -124,8 +126,8 @@ def get_dataset_mask(data_config):
     return dataset, mask
 
 
-# @ray.remote(num_gpus=0.5)
-def run_experiment(config, progress_bar_actor, file=None):
+@ray.remote(num_gpus=0.5)
+def run_experiment(config, progress_bar_actor, file_path):
     try:
         wandb_config = config["wandb"]
         model_config = config["model"]
@@ -139,9 +141,9 @@ def run_experiment(config, progress_bar_actor, file=None):
             name=f"{model_config['ssm_type']}"
         )
 
-        if file is not None:
-            torch.backends.cudnn.deterministic = True
-            torch.backends.cudnn.benchmark = False
+        # if file_path is not None:
+        #     torch.backends.cudnn.deterministic = True
+        #     torch.backends.cudnn.benchmark = False
 
         torch.manual_seed(config["seed"])
         np.random.seed(config["seed"])
@@ -154,7 +156,14 @@ def run_experiment(config, progress_bar_actor, file=None):
                                                   shuffle=True)
 
         optimizer = optim.Adam(model.parameters(), lr=train_config["lr"])
-        train(config, model, data_loader, optimizer, mask, save_one_step_file=file)
+
+        if file_path is not None:
+            json_data = json.dumps(config, sort_keys=True)  # sort_keys ensures consistent order
+            # Generate the hash (using SHA256 as an example)
+            hash_object = hashlib.sha256(json_data.encode('utf-8'))
+            file_path = f"{file_path}/{hash_object.hexdigest()}"
+
+        train(config, model, data_loader, optimizer, mask, save_one_step_file=file_path)
 
         for i in range(6, 21):
             test_data_config = deepcopy(data_config)
@@ -239,37 +248,36 @@ def main():
         except yaml.YAMLError as exc:
             raise RuntimeError(exc)
 
-    # ray.init(num_cpus=64, ignore_reinit_error=True)
+    ray.init(num_cpus=64, ignore_reinit_error=True)
     pb = ProgressBar()
     progress_bar_actor = pb.actor
     if "wandb" in base_config and "api_key" in base_config["wandb"]:
         wandb.login(key=base_config["wandb"]["api_key"])
 
+    # You can modify the values here to run in parallel using ray
     tasks = []
-    # settings_options = [
-    #     ["d_state", [16]],
-    #     ["seed", [4]],
-    #     # ["dataset.induction_len", [16, 32, 64, 128, 255]],
-    #     # ["dataset.auto_regressive", [True]],
-    #     # ["model.S4_init", ["diag-lin", "legs", "diag-real", "diag-legs", "diag-random"]],
-    #     ["model.bias", [False]],
-    #     ["model.B_is_selective", [True, False]],
-    #     ["model.C_is_selective", [True, False]],
-    #     ["model.dt_is_selective", [False, True]],
-    #     ["model.channel_sharing", [False]],
-    #     ["model.ssm_type", ["S6-Real", "S6-Complex"]],
-    # ]
-    # for config in experiments(settings_options):
-    #     config.update({"comment": ""})
-    #     config = override_config(base_config, [f"{k}={v}" for k, v in config.items()])
-    #     print("\nCONFIG:")
-    #     print(yaml.dump(config))
-    #     # tasks.append(run_experiment.remote(config, progress_bar_actor, file=parser.parse_args().file))
-    #     tasks.append(run_experiment(config, progress_bar_actor, file=parser.parse_args().file))
-    #     break
-    run_experiment(base_config, progress_bar_actor, file=parser.parse_args().file)
+    settings_options = [
+        ["d_state", [16]],
+        ["seed", [4]],
+        # ["dataset.induction_len", [16, 32, 64, 128, 255]],
+        # ["dataset.auto_regressive", [True]],
+        # ["model.S4_init", ["diag-lin", "legs", "diag-real", "diag-legs", "diag-random"]],
+        ["model.bias", [False]],
+        ["model.B_is_selective", [True, False]],
+        ["model.C_is_selective", [True, False]],
+        ["model.dt_is_selective", [False, True]],
+        ["model.channel_sharing", [False]],
+        ["model.ssm_type", ["S6-Real", "S6-Complex"]],
+    ]
+    for config in experiments(settings_options):
+        config.update({"comment": ""})
+        config = override_config(base_config, [f"{k}={v}" for k, v in config.items()])
+        print("\nCONFIG:")
+        print(yaml.dump(config))
+        tasks.append(run_experiment.remote(config, progress_bar_actor, file_path=parser.parse_args().file))
     pb.set_total(len(tasks))
     pb.print_until_done()
+
     print("finished running all")
 
 
